@@ -27,7 +27,7 @@ async function create ({
   client,
   signer,
   sourceAccountId,
-  sourceProgram,
+  sourceReceiver,
   destinationPubkey,
   amount,
   assetId,
@@ -35,11 +35,11 @@ async function create ({
   condition,
   globalData
 }) {
-  debug(`create from ${sourceAccountId} (${sourceProgram}) to key ${destinationPubkey} for ${amount} of asset ${assetId}, condition: ${condition}, expiresAt: ${expiresAt}`)
+  debug(`create from ${sourceAccountId} to key ${destinationPubkey} for ${amount} of asset ${assetId}, condition: ${condition}, expiresAt: ${expiresAt}`)
   const compiled = await client.ivy.compile({
     contract: ESCROW_CONTRACT_SOURCE,
     args: [{
-      string: sourceProgram
+      string: sourceReceiver.controlProgram
     }, {
       string: destinationPubkey
     }, {
@@ -63,7 +63,9 @@ async function create ({
       controlProgram,
       expiresAt: moment(expiresAt).toISOString()
     },
-    referenceData: globalData
+    referenceData: Object.assign({
+      sourceReceiver: sourceReceiver
+    }, globalData)
   }]
 
   const utxo = await createLockingTx({
@@ -80,7 +82,6 @@ async function fulfill ({
   signer,
   fulfillment,
   escrowUtxo,
-  expiresAt,
   destinationKey,
   destinationReceiver
 }) {
@@ -110,7 +111,7 @@ async function fulfill ({
   }]
 
   const maxtimes = [
-    moment(expiresAt).toDate()
+    moment(escrowUtxo.referenceData.expiresAt).toDate()
   ]
   const mintimes = []
 
@@ -129,7 +130,6 @@ async function reject ({
   client,
   signer,
   escrowUtxo,
-  sourceReceiver,
   destinationKey,
   globalData
 }) {
@@ -140,7 +140,7 @@ async function reject ({
     type: 'controlWithReceiver',
     amount: escrowUtxo.amount,
     assetId: escrowUtxo.assetId,
-    receiver: sourceReceiver,
+    receiver: escrowUtxo.referenceData.sourceReceiver,
     referenceData: globalData
   }]
 
@@ -174,8 +174,6 @@ async function timeout ({
   client,
   signer,
   escrowUtxo,
-  expiresAt,
-  sourceReceiver,
   globalData
 }) {
   const actions = [{
@@ -185,7 +183,7 @@ async function timeout ({
     type: 'controlWithReceiver',
     amount: escrowUtxo.amount,
     assetId: escrowUtxo.assetId,
-    receiver: sourceReceiver,
+    receiver: escrowUtxo.referenceData.sourceReceiver,
     referenceData: globalData
   }]
 
@@ -195,7 +193,7 @@ async function timeout ({
   }]
   const maxtimes = []
   const mintimes = [
-    moment(expiresAt).toDate()
+    moment(escrowUtxo.referenceData.expiresAt).toDate()
   ]
 
   const tx = await createUnlockingTx({

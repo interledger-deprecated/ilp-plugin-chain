@@ -144,15 +144,14 @@ module.exports = class PluginChain extends EventEmitter {
   async sendTransfer (transfer) {
     // TODO ensure transfer id is unique
     debug('sendTransfer', JSON.stringify(transfer))
-    const sourceProgram = (await this._createReceiver(transfer.id)).controlProgram
-    debug('sourceProgram', sourceProgram)
+    const sourceReceiver = await this._createReceiver(transfer.id)
     const destination = this._parseAccount(transfer.to)
     const escrowUtxo = await escrow.create({
       client: this._client,
       signer: this._signer,
       assetId: this._assetId,
       sourceAccountId: this._accountId,
-      sourceProgram,
+      sourceReceiver,
       destinationPubkey: destination.pubkey,
       amount: transfer.amount,
       expiresAt: new Date(transfer.expiresAt),
@@ -164,7 +163,7 @@ module.exports = class PluginChain extends EventEmitter {
         expiresAt: transfer.expiresAt
       }
     })
-    debug('sent conditional transfer', escrowUtxo)
+    debug(`sent conditional transfer ${transfer.id}`, escrowUtxo)
     return null
   }
 
@@ -174,7 +173,7 @@ module.exports = class PluginChain extends EventEmitter {
     debug('fetched utxo:', escrowUtxo)
     if (!escrowUtxo) {
       // TODO make this a proper ledger plugin error
-      throw new Error('Transfer not found')
+      throw new Error(`Transfer not found: ${tranfserId}`)
     }
     const destinationReceiver = await this._createReceiver(transferId)
     try {
@@ -184,8 +183,7 @@ module.exports = class PluginChain extends EventEmitter {
         fulfillment: Buffer.from(fulfillment, 'base64').toString('hex'),
         destinationKey: this._key,
         destinationReceiver,
-        escrowUtxo,
-        expiresAt: new Date(escrowUtxo.referenceData.expiresAt)
+        escrowUtxo
       })
       debug(`fulfilled transfer ${transferId}`, fulfillTx)
       return null
@@ -196,7 +194,29 @@ module.exports = class PluginChain extends EventEmitter {
   }
 
   async rejectIncomingTransfer (transferId, rejectionReason) {
-    // TODO
+    debug('rejectIncomingTransfer', transferId, rejectionReason)
+    const escrowUtxo = await this._getTransfer(transferId)
+    debug('fetched utxo:', escrowUtxo)
+    if (!escrowUtxo) {
+      // TODO make this a proper ledger plugin error
+      throw new Error(`Transfer not found: ${tranfserId}`)
+    }
+    try {
+      const rejectTx = await escrow.reject({
+        client: this._client,
+        signer: this._signer,
+        destinationKey: this._key,
+        escrowUtxo,
+        globalData: {
+          rejectionReason
+        }
+      })
+      debug(`rejected transfer ${transferId}`, fulfillTx)
+      return null
+    } catch (err) {
+      debug(`error rejecting transfer ${transferId}`, err)
+      throw err
+    }
   }
 
   async sendMessage (message) {
