@@ -1,0 +1,15 @@
+{
+  "name": "ilp-plugin-chain",
+  "version": "0.1.0",
+  "description": "ILP Ledger Plugin for Chain Core",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Evan Schwartz <evan@ripple.com>",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "chain-sdk": "^1.2.1",
+    "moment": "^2.18.1"
+  }
+}
