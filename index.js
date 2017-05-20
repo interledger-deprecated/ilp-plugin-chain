@@ -2,13 +2,9 @@ const chain = require('chain-sdk')
 const moment = require('moment')
 const crypto = require('crypto')
 
-const client = new chain.Client()
-const signer = new chain.HsmSigner()
-
 const ESCROW_CONTRACT_SOURCE =
 `contract Sha256HashlockTransfer(source: Program,
                 destination: Program,
-                source_key: PublicKey,
                 destination_key: PublicKey,
                 hash: Hash,
                 expires_at: Time) locks value {
@@ -21,15 +17,18 @@ const ESCROW_CONTRACT_SOURCE =
     verify checkTxSig(destination_key, sig)
     lock value with source
   }
-  clause timeout(sig: Signature) {
+  clause timeout() {
     verify after(expires_at)
-    verify checkTxSig(source_key, sig)
-    unlock value
+    lock value with source
   }
 }`
 
 // createLockingTx and createUnlockingTx taken from https://github.com/chain/chain/blob/ivy/ivy/playground/core/index.tsx
-const createLockingTx = (actions) => {
+  const createLockingTx = ({
+    client,
+    signer,
+    actions
+  }) => {
   return client.transactions.build(builder => {
     actions.forEach(action => {
       switch (action.type) {
@@ -61,11 +60,14 @@ const createLockingTx = (actions) => {
   })
 }
 
-const createUnlockingTx = (actions,
+const createUnlockingTx = ({
+  client,
+  signer,
+  actions,
   witness,
   mintimes,
   maxtimes
-) => {
+}) => {
     return client.transactions.build(builder => {
       actions.forEach(action => {
         switch (action.type) {
@@ -142,9 +144,10 @@ const createUnlockingTx = (actions,
   }
 
 async function createEscrow ({
+  client,
+  signer,
   sourceAccountId,
   sourceProgram,
-  sourceKey,
   destinationAccountId,
   destinationProgram,
   destinationKey,
@@ -159,8 +162,6 @@ async function createEscrow ({
       string: sourceProgram
     }, {
       string: destinationProgram
-    }, {
-      string: sourceKey
     }, {
       string: destinationKey
     }, {
@@ -186,11 +187,17 @@ async function createEscrow ({
     }
   }]
 
-  const utxo = await createLockingTx(actions)
+  const utxo = await createLockingTx({
+    client,
+    signer,
+    actions
+  })
   return utxo
 }
 
 async function fulfill ({
+  client,
+  signer,
   fulfillment,
   escrowUtxo,
   expiresAt,
@@ -223,12 +230,14 @@ async function fulfill ({
   ]
   const mintimes = []
 
-  const tx = await createUnlockingTx(
+  const tx = await createUnlockingTx({
+    client,
+    signer,
     actions,
     witness,
     mintimes,
     maxtimes
-  )
+  })
   return tx
 }
 
@@ -239,34 +248,40 @@ function hash (preimage) {
 }
 
 const sourceAccountId = 'acc0WT9HZ9M00808'
-const sourceKey = 'abcd'
 const destinationAccountId = 'acc0WT9HZ9HG0806'
-const destinationKey = 'abcd'
 const amount = 19
 const assetId = '3d7e4af97c9635c048f72ee943e6bc2b9fcac763bf0f7d4035a076cfc40319ca'
 const expiresAt = moment().add(1, 'days')
 const fulfillment = crypto.randomBytes(32).toString('hex')
 const condition = hash(fulfillment).toString('hex')
 
-
 async function runTest () {
-  const sourceReceiver = await client.accounts.createReceiver({
+  const sourceClient = new chain.Client()
+  const sourceSigner = new chain.HsmSigner()
+  const sourceReceiver = await sourceClient.accounts.createReceiver({
     accountId: sourceAccountId
   })
   const sourceProgram = sourceReceiver.controlProgram
+  console.log('sourceProgram', sourceProgram)
 
-  const destinationReceiver = await client.accounts.createReceiver({
+  const destinationClient = new chain.Client()
+  const destinationKeys = await destinationClient.mockHsm.keys.create()
+  const destinationSigner = new chain.HsmSigner()
+  destinationSigner.addKey(destinationKeys.xpub, destinationClient.mockHsm.signerConnection)
+  const destinationReceiver = await destinationClient.accounts.createReceiver({
     accountId: destinationAccountId
   })
   const destinationProgram = destinationReceiver.controlProgram
+  console.log('destinationProgram', destinationProgram)
 
   const escrowUtxo = await createEscrow({
+    client: sourceClient,
+    signer: sourceSigner,
     sourceAccountId,
     sourceProgram,
-    sourceKey,
     destinationAccountId,
     destinationProgram,
-    destinationKey,
+    destinationKey: destinationKeys.xpub,
     amount,
     assetId,
     expiresAt,
@@ -276,6 +291,8 @@ async function runTest () {
   console.log('created escrow utxo: ', escrowUtxo)
 
   const fulfillTx = await fulfill({
+    client: destinationClient,
+    signer: destinationSigner,
     fulfillment,
     destinationProgram,
     expiresAt,
@@ -285,5 +302,5 @@ async function runTest () {
   console.log('fulfilled escrow with tx: ', fulfillTx)
 }
 
-runTest().catch(err => console.log(JSON.stringify(err)))
+runTest().catch(err => console.log(err, JSON.stringify(err)))
 
