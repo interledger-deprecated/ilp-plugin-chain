@@ -1,46 +1,45 @@
 const { createLockingTx, createUnlockingTx } = require('./chain-util')
+const moment = require('moment')
 const debug = require('debug')('ilp-plugin-chain:escrow')
 
 const ESCROW_CONTRACT_SOURCE =
-`contract Sha256HashlockTransfer(source: Program,
-                destination: Program,
-                destination_key: PublicKey,
-                hash: Hash,
-                expires_at: Time) locks value {
-  clause fulfill(string: String) {
-    verify before(expires_at)
-    verify sha256(string) == hash
-    lock value with destination
-  }
-  clause reject(sig: Signature) {
-    verify checkTxSig(destination_key, sig)
-    lock value with source
-  }
-  clause timeout() {
-    verify after(expires_at)
-    lock value with source
-  }
-}`
+  `contract InterledgerTransfer(source: Program,
+                    destination_key: PublicKey,
+                    condition: Hash,
+                    expires_at: Time) locks value {
+      clause fulfill(fulfillment: String, sig: Signature) {
+        verify before(expires_at)
+        verify sha256(fulfillment) == condition
+        verify checkTxSig(destination_key, sig)
+        unlock value
+      }
+      clause reject(sig: Signature) {
+        verify checkTxSig(destination_key, sig)
+        lock value with source
+      }
+      clause timeout() {
+        verify after(expires_at)
+        lock value with source
+      }
+    }`
 
 async function create ({
   client,
   signer,
   sourceAccountId,
   sourceProgram,
-  destinationProgram,
   destinationPubkey,
   amount,
   assetId,
   expiresAt,
-  condition
+  condition,
+  globalData
 }) {
-  debug(`create from ${sourceAccountId} (${sourceProgram}) to ${destinationProgram} for ${amount} of asset ${assetId}, condition: ${condition}, expiresAt: ${expiresAt}`)
+  debug(`create from ${sourceAccountId} (${sourceProgram}) to key ${destinationPubkey} for ${amount} of asset ${assetId}, condition: ${condition}, expiresAt: ${expiresAt}`)
   const compiled = await client.ivy.compile({
     contract: ESCROW_CONTRACT_SOURCE,
     args: [{
       string: sourceProgram
-    }, {
-      string: destinationProgram
     }, {
       string: destinationPubkey
     }, {
@@ -62,14 +61,16 @@ async function create ({
     assetId,
     receiver: {
       controlProgram,
-      expiresAt: expiresAt.toISOString()
-    }
+      expiresAt: moment(expiresAt).toISOString()
+    },
+    referenceData: globalData
   }]
 
   const utxo = await createLockingTx({
     client,
     signer,
-    actions
+    actions,
+    globalData
   })
   return utxo
 }
@@ -80,7 +81,8 @@ async function fulfill ({
   fulfillment,
   escrowUtxo,
   expiresAt,
-  destinationProgram
+  destinationKey,
+  destinationReceiver
 }) {
   const actions = [{
     type: 'spendUnspentOutput',
@@ -89,22 +91,26 @@ async function fulfill ({
     type: 'controlWithReceiver',
     amount: escrowUtxo.amount,
     assetId: escrowUtxo.assetId,
-    receiver: {
-      expiresAt: expiresAt.toISOString(),
-      controlProgram: destinationProgram
-    }
+    receiver: destinationReceiver
   }]
 
   const witness = [{
     type: 'data',
     value: fulfillment
   }, {
+    type: 'raw_tx_signature',
+    keys: [
+      destinationKey
+    ],
+    quorum: 1,
+    signatures: []
+  }, {
     type: 'data', // fulfill clause
     value: '0000000000000000'
   }]
 
   const maxtimes = [
-    expiresAt.toDate()
+    moment(expiresAt).toDate()
   ]
   const mintimes = []
 
@@ -123,9 +129,9 @@ async function reject ({
   client,
   signer,
   escrowUtxo,
-  sourceProgram,
-  sourceReceiverExpiresAt,
-  destinationKey
+  sourceReceiver,
+  destinationKey,
+  globalData
 }) {
   const actions = [{
     type: 'spendUnspentOutput',
@@ -134,10 +140,8 @@ async function reject ({
     type: 'controlWithReceiver',
     amount: escrowUtxo.amount,
     assetId: escrowUtxo.assetId,
-    receiver: {
-      expiresAt: sourceReceiverExpiresAt,
-      controlProgram: sourceProgram
-    }
+    receiver: sourceReceiver,
+    referenceData: globalData
   }]
 
   const witness = [{
@@ -171,8 +175,8 @@ async function timeout ({
   signer,
   escrowUtxo,
   expiresAt,
-  sourceProgram,
-  sourceReceiverExpiresAt
+  sourceReceiver,
+  globalData
 }) {
   const actions = [{
     type: 'spendUnspentOutput',
@@ -181,10 +185,8 @@ async function timeout ({
     type: 'controlWithReceiver',
     amount: escrowUtxo.amount,
     assetId: escrowUtxo.assetId,
-    receiver: {
-      controlProgram: sourceProgram,
-      expiresAt: sourceReceiverExpiresAt
-    }
+    receiver: sourceReceiver,
+    referenceData: globalData
   }]
 
   const witness = [{
@@ -193,7 +195,7 @@ async function timeout ({
   }]
   const maxtimes = []
   const mintimes = [
-    expiresAt.toDate()
+    moment(expiresAt).toDate()
   ]
 
   const tx = await createUnlockingTx({
@@ -202,7 +204,8 @@ async function timeout ({
     actions,
     witness,
     mintimes,
-    maxtimes
+    maxtimes,
+    globalData
   })
   return tx
 }

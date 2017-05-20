@@ -1,15 +1,16 @@
 const PluginChain = require('./src/plugin')
 const crypto = require('crypto')
 const moment = require('moment')
+const uuid = require('uuid/v4')
 
 function hash (fulfillment) {
   const h = crypto.createHash('sha256')
-  h.update(Buffer.from(fulfillment, 'hex'))
+  h.update(Buffer.from(fulfillment, 'base64'))
   return h.digest()
 }
 
-const fulfillment = crypto.randomBytes(32).toString('hex')
-const condition = hash(fulfillment).toString('hex')
+const fulfillment = crypto.randomBytes(32).toString('base64')
+const condition = hash(fulfillment).toString('base64')
 
 async function runTest () {
   const sender = new PluginChain({
@@ -34,7 +35,7 @@ async function runTest () {
   console.log('balance', balance)
 
   const transfer = {
-    id: '8778fd45-ca4c-4e19-bc04-7c6dfdc54901',
+    id: uuid(),
     from: sender.getAccount(),
     to: receiver.getAccount(),
     ledger: sender.getInfo().prefix,
@@ -51,6 +52,8 @@ async function runTest () {
   }
 
   const transferResult = await sender.sendTransfer(transfer)
+
+  const fulfillResult = await receiver.fulfillCondition(transfer.id, fulfillment)
 }
 
 runTest().catch(err => console.log(err))

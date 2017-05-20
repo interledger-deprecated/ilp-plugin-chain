@@ -1,4 +1,4 @@
-// from https://github.com/chain/chain/blob/ivy/ivy/playground/core/index.tsx
+// based on https://github.com/chain/chain/blob/ivy/ivy/playground/core/index.tsx
 const createLockingTx = ({
   client,
   signer,

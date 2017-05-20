@@ -21,7 +21,7 @@ module.exports = class PluginChain extends EventEmitter {
     this._address = opts.address || this._prefix + this._accountId
 
     this._receiver = null
-    this._pubkey = null
+    this._key = null
   }
 
   async connect () {
@@ -29,7 +29,7 @@ module.exports = class PluginChain extends EventEmitter {
     debug('connect called')
     try {
       this._receiver = await this._createReceiver()
-      this._pubkey = await this._createKey()
+      this._key = await this._createKey()
     } catch (err) {
       debug('error connecting to chain core:', err)
       throw new Error('Error connecting client: ' + err.message)
@@ -52,7 +52,7 @@ module.exports = class PluginChain extends EventEmitter {
     debug('creating new key')
     const key = await this._client.mockHsm.keys.create()
     this._signer.addKey(key.xpub, this._client.mockHsm.signerConnection)
-    return key.xpub
+    return key
   }
 
   async _createReceiver (alias) {
@@ -73,11 +73,7 @@ module.exports = class PluginChain extends EventEmitter {
   getAccount () {
     assert(this.isConnected(), 'must be connected to getAccount')
     return this._prefix
-      + this._pubkey
-      + '.'
-      + this._receiver.controlProgram
-      + '.'
-      + (new Date(this._receiver.expiresAt)).valueOf()
+      + this._key.xpub
   }
 
   _parseAccount (address) {
@@ -86,10 +82,8 @@ module.exports = class PluginChain extends EventEmitter {
     const length = split.length
     try {
       const parsed = {
-        prefix: split.slice(0, length - 3).join('.') + '.',
-        pubkey: split[length - 3],
-        controlProgram: split[length - 2],
-        expiresAt: (new Date(parseInt(split[length - 1]))).toISOString()
+        prefix: split.slice(0, length - 2).join('.') + '.',
+        pubkey: split[length - 2]
       }
       return parsed
     } catch (err) {
@@ -130,7 +124,25 @@ module.exports = class PluginChain extends EventEmitter {
     // TODO
   }
 
+  async _getTransfer (transferId) {
+    debug('_getTransfer', transferId)
+    try {
+      const queryPage = await this._client.unspentOutputs.query({
+        filter: 'asset_alias=$1 AND reference_data.id=$2',
+        filterParams: [this._assetAlias, transferId],
+        pageSize: 100
+      })
+      const utxos = queryPage.items
+      // TODO there should only be one item, handle the case where there are more
+      return utxos[0]
+    } catch (err) {
+      debug(`error getting transfer ${transferId}`, err)
+      throw err
+    }
+  }
+
   async sendTransfer (transfer) {
+    // TODO ensure transfer id is unique
     debug('sendTransfer', JSON.stringify(transfer))
     const sourceProgram = (await this._createReceiver(transfer.id)).controlProgram
     debug('sourceProgram', sourceProgram)
@@ -141,19 +153,46 @@ module.exports = class PluginChain extends EventEmitter {
       assetId: this._assetId,
       sourceAccountId: this._accountId,
       sourceProgram,
-      destinationProgram: destination.controlProgram,
       destinationPubkey: destination.pubkey,
-      destinationExpiresAt: destination.expiresAt,
       amount: transfer.amount,
       expiresAt: new Date(transfer.expiresAt),
-      condition: transfer.executionCondition
+      condition: Buffer.from(transfer.executionCondition, 'base64').toString('hex'),
+      globalData: {
+        id: transfer.id,
+        custom: transfer.custom,
+        pubkey: destination.pubkey,
+        expiresAt: transfer.expiresAt
+      }
     })
     debug('sent conditional transfer', escrowUtxo)
-    return
+    return null
   }
 
   async fulfillCondition (transferId, fulfillment) {
-    // TODO
+    debug(`fulfillCondition for transfer ${transferId} with ${fulfillment}`)
+    const escrowUtxo = await this._getTransfer(transferId)
+    debug('fetched utxo:', escrowUtxo)
+    if (!escrowUtxo) {
+      // TODO make this a proper ledger plugin error
+      throw new Error('Transfer not found')
+    }
+    const destinationReceiver = await this._createReceiver(transferId)
+    try {
+      const fulfillTx = await escrow.fulfill({
+        client: this._client,
+        signer: this._signer,
+        fulfillment: Buffer.from(fulfillment, 'base64').toString('hex'),
+        destinationKey: this._key,
+        destinationReceiver,
+        escrowUtxo,
+        expiresAt: new Date(escrowUtxo.referenceData.expiresAt)
+      })
+      debug(`fulfilled transfer ${transferId}`, fulfillTx)
+      return null
+    } catch (err) {
+      debug(`error fulfilling transfer ${transferId}`, err)
+      throw err
+    }
   }
 
   async rejectIncomingTransfer (transferId, rejectionReason) {
