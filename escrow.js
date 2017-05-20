@@ -28,7 +28,7 @@ async function createEscrow ({
   sourceProgram,
   destinationAccountId,
   destinationProgram,
-  destinationKey,
+  destinationPubkey,
   amount,
   assetId,
   expiresAt,
@@ -41,7 +41,7 @@ async function createEscrow ({
     }, {
       string: destinationProgram
     }, {
-      string: destinationKey
+      string: destinationPubkey
     }, {
       string: condition
     }, {
@@ -98,8 +98,7 @@ async function fulfill ({
     type: 'data',
     value: fulfillment
   }, {
-    // don't know what this one is about
-    type: 'data',
+    type: 'data', // fulfill clause
     value: '0000000000000000'
   }]
 
@@ -119,6 +118,96 @@ async function fulfill ({
   return tx
 }
 
+async function reject ({
+  client,
+  signer,
+  escrowUtxo,
+  sourceProgram,
+  sourceReceiverExpiresAt,
+  destinationKey
+}) {
+  const actions = [{
+    type: 'spendUnspentOutput',
+    outputId: escrowUtxo.id
+  }, {
+    type: 'controlWithReceiver',
+    amount: escrowUtxo.amount,
+    assetId: escrowUtxo.assetId,
+    receiver: {
+      expiresAt: sourceReceiverExpiresAt,
+      controlProgram: sourceProgram
+    }
+  }]
+
+  const witness = [{
+    type: 'raw_tx_signature',
+    keys: [
+      destinationKey
+    ],
+    quorum: 1,
+    signatures: []
+  }, {
+    type: 'data',
+    value: '0100000000000000' // reject clause
+  }]
+
+  const maxtimes = []
+  const mintimes = []
+
+  const tx = await createUnlockingTx({
+    client,
+    signer,
+    actions,
+    witness,
+    mintimes,
+    maxtimes
+  })
+  return tx
+}
+
+async function timeout ({
+  client,
+  signer,
+  escrowUtxo,
+  expiresAt,
+  sourceProgram,
+  sourceReceiverExpiresAt
+}) {
+  const actions = [{
+    type: 'spendUnspentOutput',
+    outputId: escrowUtxo.id
+  }, {
+    type: 'controlWithReceiver',
+    amount: escrowUtxo.amount,
+    assetId: escrowUtxo.assetId,
+    receiver: {
+      controlProgram: sourceProgram,
+      expiresAt: sourceReceiverExpiresAt
+    }
+  }]
+
+  const witness = [{
+    type: 'data',
+    value: '0200000000000000' // timeout clause
+  }]
+  const maxtimes = []
+  const mintimes = [
+    expiresAt.toDate()
+  ]
+
+  const tx = await createUnlockingTx({
+    client,
+    signer,
+    actions,
+    witness,
+    mintimes,
+    maxtimes
+  })
+  return tx
+}
+
 exports.createEscrow = createEscrow
 exports.fulfill = fulfill
+exports.reject = reject
+exports.timeout = timeout
 

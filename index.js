@@ -1,7 +1,7 @@
 const chain = require('chain-sdk')
 const moment = require('moment')
 const crypto = require('crypto')
-const { createEscrow, fulfill } = require('./escrow')
+const { createEscrow, fulfill, reject, timeout } = require('./escrow')
 
 function hash (preimage) {
   const h = crypto.createHash('sha256')
@@ -11,7 +11,6 @@ function hash (preimage) {
 
 const sourceAccountId = 'acc0WT9HZ9M00808'
 const destinationAccountId = 'acc0WT9HZ9HG0806'
-const amount = 19
 const assetId = '3d7e4af97c9635c048f72ee943e6bc2b9fcac763bf0f7d4035a076cfc40319ca'
 const expiresAt = moment().add(1, 'days')
 const fulfillment = crypto.randomBytes(32).toString('hex')
@@ -27,14 +26,16 @@ async function runTest () {
   console.log('sourceProgram', sourceProgram)
 
   const destinationClient = new chain.Client()
-  const destinationKeys = await destinationClient.mockHsm.keys.create()
+  const destinationKey = await destinationClient.mockHsm.keys.create()
   const destinationSigner = new chain.HsmSigner()
-  destinationSigner.addKey(destinationKeys.xpub, destinationClient.mockHsm.signerConnection)
+  destinationSigner.addKey(destinationKey.xpub, destinationClient.mockHsm.signerConnection)
   const destinationReceiver = await destinationClient.accounts.createReceiver({
     accountId: destinationAccountId
   })
   const destinationProgram = destinationReceiver.controlProgram
   console.log('destinationProgram', destinationProgram)
+
+  // Fulfill
 
   const escrowUtxo = await createEscrow({
     client: sourceClient,
@@ -43,8 +44,8 @@ async function runTest () {
     sourceProgram,
     destinationAccountId,
     destinationProgram,
-    destinationKey: destinationKeys.xpub,
-    amount,
+    destinationPubkey: destinationKey.xpub,
+    amount: 1,
     assetId,
     expiresAt,
     condition
@@ -62,6 +63,67 @@ async function runTest () {
   })
 
   console.log('fulfilled escrow with tx: ', fulfillTx)
+
+  // Timeout
+
+  const earlyExpiry = moment().add(2, 'seconds')
+  const escrowUtxo2 = await createEscrow({
+    client: sourceClient,
+    signer: sourceSigner,
+    sourceAccountId,
+    sourceProgram,
+    destinationAccountId,
+    destinationProgram,
+    destinationPubkey: destinationKey.xpub,
+    amount: 2,
+    assetId,
+    expiresAt: earlyExpiry,
+    condition
+  })
+
+  console.log('created escrow utxo: ', escrowUtxo)
+
+  await new Promise((resolve) => setTimeout(resolve, 2000))
+
+  const timeoutTx = await timeout({
+    client: sourceClient,
+    signer: sourceSigner,
+    escrowUtxo: escrowUtxo2,
+    sourceProgram,
+    sourceReceiverExpiresAt: sourceReceiver.expiresAt,
+    expiresAt: earlyExpiry
+  })
+
+  console.log('expired tx:', timeoutTx)
+
+  // Reject
+
+  const escrowUtxo3 = await createEscrow({
+    client: sourceClient,
+    signer: sourceSigner,
+    sourceAccountId,
+    sourceProgram,
+    destinationAccountId,
+    destinationProgram,
+    destinationPubkey: destinationKey.xpub,
+    amount: 3,
+    assetId,
+    expiresAt,
+    condition
+  })
+
+  console.log('created escrow utxo: ', escrowUtxo)
+
+  const rejectTx = await reject({
+    client: destinationClient,
+    signer: destinationSigner,
+    escrowUtxo: escrowUtxo3,
+    sourceProgram,
+    sourceReceiverExpiresAt: sourceReceiver.expiresAt,
+    destinationKey
+  })
+
+  console.log('rejected tx:', rejectTx)
 }
 
 runTest().catch(err => console.log(err, JSON.stringify(err)))
