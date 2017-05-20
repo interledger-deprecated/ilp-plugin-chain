@@ -1,4 +1,5 @@
 const { createLockingTx, createUnlockingTx } = require('./chain-util')
+const debug = require('debug')('ilp-plugin-chain:escrow')
 
 const ESCROW_CONTRACT_SOURCE =
 `contract Sha256HashlockTransfer(source: Program,
@@ -21,12 +22,11 @@ const ESCROW_CONTRACT_SOURCE =
   }
 }`
 
-async function createEscrow ({
+async function create ({
   client,
   signer,
   sourceAccountId,
   sourceProgram,
-  destinationAccountId,
   destinationProgram,
   destinationPubkey,
   amount,
@@ -34,6 +34,7 @@ async function createEscrow ({
   expiresAt,
   condition
 }) {
+  debug(`create from ${sourceAccountId} (${sourceProgram}) to ${destinationProgram} for ${amount} of asset ${assetId}, condition: ${condition}, expiresAt: ${expiresAt}`)
   const compiled = await client.ivy.compile({
     contract: ESCROW_CONTRACT_SOURCE,
     args: [{
@@ -206,7 +207,7 @@ async function timeout ({
   return tx
 }
 
-exports.createEscrow = createEscrow
+exports.create = create
 exports.fulfill = fulfill
 exports.reject = reject
 exports.timeout = timeout

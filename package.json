@@ -2,7 +2,7 @@
   "name": "ilp-plugin-chain",
   "version": "0.1.0",
   "description": "ILP Ledger Plugin for Chain Core",
-  "main": "index.js",
+  "main": "src/index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -10,6 +10,8 @@
   "license": "Apache-2.0",
   "dependencies": {
     "chain-sdk": "^1.2.1",
+    "debug": "^2.6.8",
+    "eventemitter3": "^2.0.3",
     "moment": "^2.18.1"
   }
 }

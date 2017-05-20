@@ -1,7 +1,7 @@
 const chain = require('chain-sdk')
 const moment = require('moment')
 const crypto = require('crypto')
-const { createEscrow, fulfill, reject, timeout } = require('./escrow')
+const { create, fulfill, reject, timeout } = require('./src/escrow')
 
 function hash (preimage) {
   const h = crypto.createHash('sha256')
@@ -37,7 +37,7 @@ async function runTest () {
 
   // Fulfill
 
-  const escrowUtxo = await createEscrow({
+  const escrowUtxo = await create({
     client: sourceClient,
     signer: sourceSigner,
     sourceAccountId,
@@ -67,7 +67,7 @@ async function runTest () {
   // Timeout
 
   const earlyExpiry = moment().add(2, 'seconds')
-  const escrowUtxo2 = await createEscrow({
+  const escrowUtxo2 = await create({
     client: sourceClient,
     signer: sourceSigner,
     sourceAccountId,
@@ -98,7 +98,7 @@ async function runTest () {
 
   // Reject
 
-  const escrowUtxo3 = await createEscrow({
+  const escrowUtxo3 = await create({
     client: sourceClient,
     signer: sourceSigner,
     sourceAccountId,
