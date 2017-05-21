@@ -20,8 +20,29 @@ module.exports = class PluginChain extends EventEmitter {
     this._accountId = opts.accountId
     this._address = opts.address || this._prefix + this._accountId
 
+    this._connected = false
     this._receiver = null
     this._key = null
+    this._feed = null
+  }
+
+  _handleNotification (tx) {
+    console.log('xx got notification', tx)
+  }
+
+  async _listenForNotifications () {
+    debug(`creating transactionFeed for asset: ${this._assetId} pubkey: ${this._key.xpub}`)
+    this._feed = await this._client.transactionFeeds.create({
+      alias: this._key.xpub,
+      filter: `outputs(asset_id='${this.assetId}' AND reference_data.pubkey='${this._key.xpub}')`
+    })
+    const processingLoop = (tx, next, done, fail) => {
+      debug('processing notification')
+      this._handleNotification(tx)
+      // TODO should we wait for the notification handlers to be called before acknowledging?
+      next(true)
+    }
+    this._feed.consume(processingLoop)
   }
 
   async connect () {
@@ -30,17 +51,19 @@ module.exports = class PluginChain extends EventEmitter {
     try {
       this._receiver = await this._createReceiver()
       this._key = await this._createKey()
+      //await this._listenForNotifications()
     } catch (err) {
       debug('error connecting to chain core:', err)
       throw new Error('Error connecting client: ' + err.message)
     }
+    this._connected = true
     debug('connected')
     return
   }
 
   async disconnect () {
     // TODO: clean up if necessary
-    return Promise.resolve()
+    await this._feed.delete()
   }
 
   isConnected () {
@@ -50,9 +73,16 @@ module.exports = class PluginChain extends EventEmitter {
   async _createKey () {
     // TODO make this work with the real HSM
     debug('creating new key')
-    const key = await this._client.mockHsm.keys.create()
-    this._signer.addKey(key.xpub, this._client.mockHsm.signerConnection)
-    return key
+    const key = await this._client.accounts.createPubkey({
+      accountId: this._accountId
+    })
+    const keyId = {
+      xpub: key.rootXpub,
+      derivationPath: key.pubkeyDerivationPath
+    }
+    this._signer.addKey(keyId.xpub, this._client.mockHsm.signerConnection)
+    debug('created key', keyId)
+    return keyId
   }
 
   async _createReceiver (alias) {
@@ -104,8 +134,8 @@ module.exports = class PluginChain extends EventEmitter {
     debug(`requesting ${this._assetAlias} balance for account ${this._accountAlias}`)
     try {
       const queryPage = await this._client.unspentOutputs.query({
-        filter: 'account_alias=$1 AND asset_alias=$2',
-        filterParams: [this._accountAlias, this._assetAlias],
+        filter: 'account_id=$1 AND asset_id=$2',
+        filterParams: [this._accountId, this._assetId],
         pageSize: 100
       })
       // TODO: handle if this isn't the last page
@@ -128,8 +158,8 @@ module.exports = class PluginChain extends EventEmitter {
     debug('_getTransfer', transferId)
     try {
       const queryPage = await this._client.unspentOutputs.query({
-        filter: 'asset_alias=$1 AND reference_data.id=$2',
-        filterParams: [this._assetAlias, transferId],
+        filter: 'asset_id=$1 AND reference_data.id=$2',
+        filterParams: [this._assetId, transferId],
         pageSize: 100
       })
       const utxos = queryPage.items
@@ -156,11 +186,12 @@ module.exports = class PluginChain extends EventEmitter {
       amount: transfer.amount,
       expiresAt: new Date(transfer.expiresAt),
       condition: Buffer.from(transfer.executionCondition, 'base64').toString('hex'),
-      globalData: {
+      utxoData: {
         id: transfer.id,
         custom: transfer.custom,
         pubkey: destination.pubkey,
-        expiresAt: transfer.expiresAt
+        expiresAt: transfer.expiresAt,
+        ilp: transfer.ilp
       }
     })
     debug(`sent conditional transfer ${transfer.id}`, escrowUtxo)

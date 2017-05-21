@@ -2,7 +2,8 @@
 const createLockingTx = ({
   client,
   signer,
-  actions
+  actions,
+  transactionData
 }) => {
   return client.transactions.build(builder => {
     actions.forEach(action => {
@@ -17,6 +18,10 @@ const createLockingTx = ({
           break
       }
     })
+
+    if (transactionData) {
+      builder.transactionReferenceData(transactionData)
+    }
   }).then((tpl) => {
     tpl.signingInstructions.forEach((instruction) => {
       instruction.witnessComponents.forEach((component) => {
@@ -41,7 +46,8 @@ const createUnlockingTx = ({
   actions,
   witness,
   mintimes,
-  maxtimes
+  maxtimes,
+  transactionData
 }) => {
     return client.transactions.build(builder => {
       actions.forEach(action => {
@@ -62,6 +68,10 @@ const createUnlockingTx = ({
             break
         }
       })
+
+      if (transactionData) {
+        builder.transactionReferenceData(transactionData)
+      }
 
       if (mintimes.length > 0) {
         const findMax = (currMax, currVal) => {

@@ -33,7 +33,8 @@ async function create ({
   assetId,
   expiresAt,
   condition,
-  globalData
+  transactionData,
+  utxoData
 }) {
   debug(`create from ${sourceAccountId} to key ${destinationPubkey} for ${amount} of asset ${assetId}, condition: ${condition}, expiresAt: ${expiresAt}`)
   const compiled = await client.ivy.compile({
@@ -65,14 +66,14 @@ async function create ({
     },
     referenceData: Object.assign({
       sourceReceiver: sourceReceiver
-    }, globalData)
+    }, utxoData)
   }]
 
   const utxo = await createLockingTx({
     client,
     signer,
     actions,
-    globalData
+    transactionData
   })
   return utxo
 }
@@ -131,7 +132,8 @@ async function reject ({
   signer,
   escrowUtxo,
   destinationKey,
-  globalData
+  utxoData,
+  transactionData
 }) {
   const actions = [{
     type: 'spendUnspentOutput',
@@ -141,7 +143,7 @@ async function reject ({
     amount: escrowUtxo.amount,
     assetId: escrowUtxo.assetId,
     receiver: escrowUtxo.referenceData.sourceReceiver,
-    referenceData: globalData
+    referenceData: utxoData
   }]
 
   const witness = [{
@@ -165,7 +167,8 @@ async function reject ({
     actions,
     witness,
     mintimes,
-    maxtimes
+    maxtimes,
+    transactionData
   })
   return tx
 }

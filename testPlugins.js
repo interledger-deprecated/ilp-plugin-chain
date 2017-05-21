@@ -30,7 +30,9 @@ async function runTest () {
   })
 
   await sender.connect()
+  console.log('sender connected')
   await receiver.connect()
+  console.log('receiver connected')
   const balance = await sender.getBalance()
   console.log('balance', balance)
 
