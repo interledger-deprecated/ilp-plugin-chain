@@ -31,11 +31,26 @@ module.exports = class PluginChain extends EventEmitter {
   }
 
   async _listenForNotifications () {
-    debug(`creating transactionFeed for asset: ${this._assetId} pubkey: ${this._key.xpub}`)
-    this._feed = await this._client.transactionFeeds.create({
-      alias: this._key.xpub,
-      filter: `outputs(asset_id='${this.assetId}' AND reference_data.pubkey='${this._key.xpub}')`
-    })
+    debug(`subscribing to transactionFeed for asset: ${this._assetId} pubkey: ${this._key.xpub}`)
+    // create a new feed if one doesn't already exist
+    try {
+      this._feed = await this._client.transactionFeeds.get({
+        alias: this._key.xpub
+      })
+      debug('using existing feed')
+    } catch (err) {
+      if (err.message.indexOf('CH002') !== -1) {
+        debug('creating new feed')
+        this._feed = await this._client.transactionFeeds.create({
+          alias: this._key.xpub,
+          filter: `outputs(asset_id='${this.assetId}' AND reference_data.pubkey='${this._key.xpub}')`
+        })
+      } else {
+        debug('unexpected error looking up transaction feed', err)
+        throw err
+      }
+    }
+
     const processingLoop = (tx, next, done, fail) => {
       debug('processing notification')
       this._handleNotification(tx)
@@ -43,6 +58,7 @@ module.exports = class PluginChain extends EventEmitter {
       next(true)
     }
     this._feed.consume(processingLoop)
+      .catch(err => debug('error processing notification loop', err))
   }
 
   async connect () {
@@ -51,7 +67,7 @@ module.exports = class PluginChain extends EventEmitter {
     try {
       this._receiver = await this._createReceiver()
       this._key = await this._createKey()
-      //await this._listenForNotifications()
+      await this._listenForNotifications()
     } catch (err) {
       debug('error connecting to chain core:', err)
       throw new Error('Error connecting client: ' + err.message)
@@ -63,7 +79,10 @@ module.exports = class PluginChain extends EventEmitter {
 
   async disconnect () {
     // TODO: clean up if necessary
-    await this._feed.delete()
+    if (this._feed) {
+      await this._feed.delete()
+      this._feed = null
+    }
   }
 
   isConnected () {
@@ -76,13 +95,10 @@ module.exports = class PluginChain extends EventEmitter {
     const key = await this._client.accounts.createPubkey({
       accountId: this._accountId
     })
-    const keyId = {
-      xpub: key.rootXpub,
-      derivationPath: key.pubkeyDerivationPath
-    }
-    this._signer.addKey(keyId.xpub, this._client.mockHsm.signerConnection)
-    debug('created key', keyId)
-    return keyId
+    // rename fields to make them work with other parts of the chain SDK
+    this._signer.addKey(key.rootXpub, this._client.mockHsm.signerConnection)
+    debug('created key', key)
+    return key
   }
 
   async _createReceiver (alias) {
@@ -103,7 +119,7 @@ module.exports = class PluginChain extends EventEmitter {
   getAccount () {
     assert(this.isConnected(), 'must be connected to getAccount')
     return this._prefix
-      + this._key.xpub
+      + this._key.pubkey
   }
 
   _parseAccount (address) {
@@ -212,7 +228,10 @@ module.exports = class PluginChain extends EventEmitter {
         client: this._client,
         signer: this._signer,
         fulfillment: Buffer.from(fulfillment, 'base64').toString('hex'),
-        destinationKey: this._key,
+        destinationKey: {
+          xpub: this._key.rootXpub,
+          derivationPath: this._key.pubkeyDerivationPath
+        },
         destinationReceiver,
         escrowUtxo
       })
@@ -236,7 +255,10 @@ module.exports = class PluginChain extends EventEmitter {
       const rejectTx = await escrow.reject({
         client: this._client,
         signer: this._signer,
-        destinationKey: this._key,
+        destinationKey: {
+          xpub: this._key.rootXpub,
+          derivationPath: this._key.pubkeyDerivationPath
+        },
         escrowUtxo,
         globalData: {
           rejectionReason

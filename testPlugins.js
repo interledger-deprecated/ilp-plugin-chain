@@ -58,4 +58,4 @@ async function runTest () {
   const fulfillResult = await receiver.fulfillCondition(transfer.id, fulfillment)
 }
 
-runTest().catch(err => console.log(err))
+runTest().catch(err => console.log(JSON.stringify(err)))
