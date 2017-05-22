@@ -129,7 +129,7 @@ module.exports = class PluginChain extends EventEmitter {
     try {
       const parsed = {
         prefix: split.slice(0, length - 2).join('.') + '.',
-        pubkey: split[length - 2]
+        pubkey: split[length - 1]
       }
       return parsed
     } catch (err) {
