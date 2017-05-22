@@ -23,42 +23,47 @@ module.exports = class PluginChain extends EventEmitter {
     this._connected = false
     this._receiver = null
     this._key = null
-    this._feed = null
   }
 
   _handleNotification (tx) {
-    console.log('xx got notification', tx)
+    // TODO is some trick someone can play with multiple outputs?
+    for (let output of tx.outputs) {
+      // TODO how do we verify the controlProgram used?
+      // TODO what's the right way to determine which output is a) for us and b) related to ilp?
+      if (output.referenceData && output.referenceData.to === this.getAccount()) {
+        const transfer = {
+          id: output.referenceData.id,
+          amount: output.amount,
+          ledger: this._prefix,
+          // TODO need a field that the sender cannot forge
+          from: output.referenceData.from,
+          to: this.getAccount(),
+          // TODO how do we get the executionCondition?
+          executionCondition: output.referenceData.executionCondition,
+          ilp: output.referenceData.ilp,
+          custom: output.referenceData.custom,
+          expiresAt: output.referenceData.expiresAt
+        }
+        debug('emitting incoming_prepare', transfer)
+        this.emit('incoming_prepare', transfer)
+      }
+    }
   }
 
   async _listenForNotifications () {
-    debug(`subscribing to transactionFeed for asset: ${this._assetId} pubkey: ${this._key.xpub}`)
-    // create a new feed if one doesn't already exist
-    try {
-      this._feed = await this._client.transactionFeeds.get({
-        alias: this._key.xpub
-      })
-      debug('using existing feed')
-    } catch (err) {
-      if (err.message.indexOf('CH002') !== -1) {
-        debug('creating new feed')
-        this._feed = await this._client.transactionFeeds.create({
-          alias: this._key.xpub,
-          filter: `outputs(asset_id='${this.assetId}' AND reference_data.pubkey='${this._key.xpub}')`
-        })
-      } else {
-        debug('unexpected error looking up transaction feed', err)
-        throw err
-      }
-    }
+    debug(`subscribing to transactionFeed for asset: ${this._assetId} pubkey: ${this._key.pubkey}`)
+
+    const feed = await this._client.transactionFeeds.create({
+      alias: this._key.pubkey,
+      filter: `outputs(asset_id='${this._assetId}' AND reference_data.to='${this.getAccount()}')`
+    })
 
     const processingLoop = (tx, next, done, fail) => {
-      debug('processing notification')
+      // TODO handle errors
       this._handleNotification(tx)
-      // TODO should we wait for the notification handlers to be called before acknowledging?
       next(true)
     }
-    this._feed.consume(processingLoop)
-      .catch(err => debug('error processing notification loop', err))
+    feed.consume(processingLoop)
   }
 
   async connect () {
@@ -79,10 +84,9 @@ module.exports = class PluginChain extends EventEmitter {
 
   async disconnect () {
     // TODO: clean up if necessary
-    if (this._feed) {
-      await this._feed.delete()
-      this._feed = null
-    }
+    await this._feed.delete({
+      alias: this._key.pubkey
+    })
   }
 
   isConnected () {
@@ -204,13 +208,17 @@ module.exports = class PluginChain extends EventEmitter {
       condition: Buffer.from(transfer.executionCondition, 'base64').toString('hex'),
       utxoData: {
         id: transfer.id,
-        custom: transfer.custom,
-        pubkey: destination.pubkey,
+        ledger: transfer.ledger,
+        from: transfer.from,
+        to: transfer.to,
+        ilp: transfer.ilp,
+        executionCondition: transfer.executionCondition,
         expiresAt: transfer.expiresAt,
-        ilp: transfer.ilp
+        custom: transfer.custom
       }
+      // TODO handle noteToSelf
     })
-    debug(`sent conditional transfer ${transfer.id}`, escrowUtxo)
+    debug(`sent conditional transfer ${transfer.id}, utxo: ${escrowUtxo.id}`)
     return null
   }
 

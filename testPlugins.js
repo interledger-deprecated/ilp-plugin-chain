@@ -3,6 +3,10 @@ const crypto = require('crypto')
 const moment = require('moment')
 const uuid = require('uuid/v4')
 
+const chain = require('chain-sdk')
+const client = new chain.Client()
+const signer = new chain.HsmSigner()
+
 function hash (fulfillment) {
   const h = crypto.createHash('sha256')
   h.update(Buffer.from(fulfillment, 'base64'))
@@ -13,6 +17,8 @@ const fulfillment = crypto.randomBytes(32).toString('base64')
 const condition = hash(fulfillment).toString('base64')
 
 async function runTest () {
+
+
   const sender = new PluginChain({
     accountAlias: 'Alice',
     accountId: 'acc0WT9HZ9M00808',
@@ -33,8 +39,8 @@ async function runTest () {
   console.log('sender connected')
   await receiver.connect()
   console.log('receiver connected')
-  const balance = await sender.getBalance()
-  console.log('balance', balance)
+  console.log('sender balance', await sender.getBalance())
+  console.log('receiver balance', await receiver.getBalance())
 
   const transfer = {
     id: uuid(),
@@ -53,9 +59,20 @@ async function runTest () {
     }
   }
 
+  receiver.on('incoming_prepare', async function (transfer) {
+    console.log('receiver got incoming prepare notification', transfer)
+    console.log('sender balance', await sender.getBalance())
+    console.log('receiver balance', await receiver.getBalance())
+
+    await receiver.fulfillCondition(transfer.id, fulfillment)
+
+    console.log('sender balance', await sender.getBalance())
+    console.log('receiver balance', await receiver.getBalance())
+
+  })
+
   const transferResult = await sender.sendTransfer(transfer)
 
-  const fulfillResult = await receiver.fulfillCondition(transfer.id, fulfillment)
 }
 
 runTest().catch(err => console.log(JSON.stringify(err)))
