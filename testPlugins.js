@@ -15,23 +15,22 @@ function hash (fulfillment) {
 
 const fulfillment = crypto.randomBytes(32).toString('base64')
 const condition = hash(fulfillment).toString('base64')
+console.log('condition: ', condition, 'fulfillment:', fulfillment)
 
 async function runTest () {
-
-
   const sender = new PluginChain({
     accountAlias: 'Alice',
-    accountId: 'acc0WT9HZ9M00808',
+    accountId: 'acc0WZ5E1PRG08CY',
     assetAlias: 'Gold',
-    assetId: '3d7e4af97c9635c048f72ee943e6bc2b9fcac763bf0f7d4035a076cfc40319ca',
+    assetId: '0eb8ac24e6c8890469263b414aefc1303ab3f3aad04fcb1b9f7db77b5869a1ae',
     chainCorePrefix: 'test.chain.',
   })
 
   const receiver = new PluginChain({
     accountAlias: 'Bob',
-    accountId: 'acc0WT9HZ9HG0806',
+    accountId: 'acc0WZ5E1PRG08CT',
     assetAlias: 'Gold',
-    assetId: '3d7e4af97c9635c048f72ee943e6bc2b9fcac763bf0f7d4035a076cfc40319ca',
+    assetId: '0eb8ac24e6c8890469263b414aefc1303ab3f3aad04fcb1b9f7db77b5869a1ae',
     chainCorePrefix: 'test.chain.',
   })
 
@@ -64,7 +63,11 @@ async function runTest () {
     console.log('sender balance', await sender.getBalance())
     console.log('receiver balance', await receiver.getBalance())
 
+    try {
     await receiver.fulfillCondition(transfer.id, fulfillment)
+    } catch (err) {
+      console.log('error submitting fulfillment', err)
+    }
 
     console.log('sender balance', await sender.getBalance())
     console.log('receiver balance', await receiver.getBalance())
@@ -72,7 +75,6 @@ async function runTest () {
   })
 
   const transferResult = await sender.sendTransfer(transfer)
-
 }
 
 runTest().catch(err => console.log(JSON.stringify(err)))

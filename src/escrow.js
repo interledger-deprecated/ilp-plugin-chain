@@ -1,6 +1,7 @@
 const { createLockingTx, createUnlockingTx } = require('./chain-util')
 const moment = require('moment')
 const debug = require('debug')('ilp-plugin-chain:escrow')
+const assert = require('assert')
 
 const ESCROW_CONTRACT_SOURCE =
   `contract InterledgerTransfer(source: Program,
@@ -22,6 +23,42 @@ const ESCROW_CONTRACT_SOURCE =
         lock value with source
       }
     }`
+
+async function verify ({
+  client,
+  sourceReceiver,
+  destinationPubkey,
+  amount,
+  assetId,
+  expiresAt,
+  condition,
+  utxo
+}) {
+  debug('check utxo against params', utxo, { sourceReceiver, destinationPubkey, amount, assetId, expiresAt, condition })
+  let compiled
+  try {
+    compiled = await client.ivy.compile({
+      contract: ESCROW_CONTRACT_SOURCE,
+      args: [{
+        string: sourceReceiver.controlProgram
+      }, {
+        string: destinationPubkey
+      }, {
+        string: condition
+      }, {
+        integer: expiresAt.valueOf()
+      }]
+    })
+  } catch (err) {
+    debug('error reconstructing escrow contract', err)
+    throw err
+  }
+  const controlProgram = compiled.program
+  debug('recompiled contract', controlProgram)
+  assert(utxo.controlProgram === controlProgram, 'escrow contract is not an interledger transfer or has the wrong parameters')
+  debug('verified that control program matches what we expect')
+  // TODO do we need to check the expiry of the control program?
+}
 
 async function create ({
   client,
@@ -84,7 +121,8 @@ async function fulfill ({
   fulfillment,
   escrowUtxo,
   destinationKey,
-  destinationReceiver
+  destinationReceiver,
+  expiresAt
 }) {
   const actions = [{
     type: 'spendUnspentOutput',
@@ -112,7 +150,7 @@ async function fulfill ({
   }]
 
   const maxtimes = [
-    moment(escrowUtxo.referenceData.expiresAt).toDate()
+    moment(expiresAt).toDate()
   ]
   const mintimes = []
 
@@ -215,4 +253,5 @@ exports.create = create
 exports.fulfill = fulfill
 exports.reject = reject
 exports.timeout = timeout
+exports.verify = verify
 

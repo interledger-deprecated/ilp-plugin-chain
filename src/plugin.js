@@ -4,6 +4,7 @@ const chain = require('chain-sdk')
 const debug = require('debug')('ilp-plugin-chain')
 const EventEmitter = require('eventemitter3')
 const assert = require('assert')
+const moment = require('moment')
 
 const escrow = require('./escrow')
 
@@ -25,12 +26,25 @@ module.exports = class PluginChain extends EventEmitter {
     this._key = null
   }
 
-  _handleNotification (tx) {
+  async _handleNotification (tx) {
     // TODO is some trick someone can play with multiple outputs?
     for (let output of tx.outputs) {
       // TODO how do we verify the controlProgram used?
       // TODO what's the right way to determine which output is a) for us and b) related to ilp?
       if (output.referenceData && output.referenceData.to === this.getAccount()) {
+        // check that the incoming transfer is locked with the right control program
+        await escrow.verify({
+          utxo: output,
+          client: this._client,
+          sourceReceiver: output.referenceData.sourceReceiver,
+          destinationPubkey: this._key.pubkey,
+          amount: output.amount,
+          assetId: output.assetId,
+          // TODO decide on which part of the codebase is dealing with which date format
+          expiresAt: moment(output.referenceData.expiresAt).valueOf(),
+          condition: Buffer.from(output.referenceData.executionCondition, 'base64').toString('hex')
+        })
+        // TODO check that all the referenceData we expect is there
         const transfer = {
           id: output.referenceData.id,
           amount: output.amount,
@@ -38,14 +52,17 @@ module.exports = class PluginChain extends EventEmitter {
           // TODO need a field that the sender cannot forge
           from: output.referenceData.from,
           to: this.getAccount(),
-          // TODO how do we get the executionCondition?
           executionCondition: output.referenceData.executionCondition,
           ilp: output.referenceData.ilp,
           custom: output.referenceData.custom,
           expiresAt: output.referenceData.expiresAt
         }
         debug('emitting incoming_prepare', transfer)
-        this.emit('incoming_prepare', transfer)
+        try {
+          this.emit('incoming_prepare', transfer)
+        } catch (err) {
+          console.error('error in event handler', err)
+        }
       }
     }
   }
@@ -61,13 +78,14 @@ module.exports = class PluginChain extends EventEmitter {
     const processingLoop = (tx, next, done, fail) => {
       // TODO handle errors
       this._handleNotification(tx)
-      next(true)
+        .then(() => next(true))
+        .catch(err => debug('error processing notification', err))
     }
     feed.consume(processingLoop)
   }
 
   async connect () {
-    // TODO: make sure we can connect to the chain core
+    // TODO make sure we reclaim all the previous escrows that expired
     debug('connect called')
     try {
       this._receiver = await this._createReceiver()
@@ -207,8 +225,8 @@ module.exports = class PluginChain extends EventEmitter {
       expiresAt: new Date(transfer.expiresAt),
       condition: Buffer.from(transfer.executionCondition, 'base64').toString('hex'),
       utxoData: {
+        // TODO minimize the data sent here
         id: transfer.id,
-        ledger: transfer.ledger,
         from: transfer.from,
         to: transfer.to,
         ilp: transfer.ilp,
@@ -219,13 +237,14 @@ module.exports = class PluginChain extends EventEmitter {
       // TODO handle noteToSelf
     })
     debug(`sent conditional transfer ${transfer.id}, utxo: ${escrowUtxo.id}`)
+    // TODO start timer for when we can reclaim the transfer if it expires
     return null
   }
 
   async fulfillCondition (transferId, fulfillment) {
     debug(`fulfillCondition for transfer ${transferId} with ${fulfillment}`)
+    // TODO check if the transfer is already fulfilled
     const escrowUtxo = await this._getTransfer(transferId)
-    debug('fetched utxo:', escrowUtxo)
     if (!escrowUtxo) {
       // TODO make this a proper ledger plugin error
       throw new Error(`Transfer not found: ${tranfserId}`)
@@ -236,6 +255,7 @@ module.exports = class PluginChain extends EventEmitter {
         client: this._client,
         signer: this._signer,
         fulfillment: Buffer.from(fulfillment, 'base64').toString('hex'),
+        expiresAt: escrowUtxo.referenceData.expiresAt,
         destinationKey: {
           xpub: this._key.rootXpub,
           derivationPath: this._key.pubkeyDerivationPath
