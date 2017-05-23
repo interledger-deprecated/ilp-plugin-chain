@@ -31,7 +31,7 @@ module.exports = class PluginChain extends EventEmitter {
     for (let output of tx.outputs) {
       // TODO how do we verify the controlProgram used?
       // TODO what's the right way to determine which output is a) for us and b) related to ilp?
-      if (output.referenceData && output.referenceData.to === this.getAccount()) {
+      if (output.referenceData && output.referenceData.destinationPubkey && output.referenceData.destinationPubkey === this._key.pubkey) {
         // check that the incoming transfer is locked with the right control program
         await escrow.verify({
           utxo: output,
@@ -50,7 +50,7 @@ module.exports = class PluginChain extends EventEmitter {
           amount: output.amount,
           ledger: this._prefix,
           // TODO need a field that the sender cannot forge
-          from: output.referenceData.from,
+          from: this._prefix + output.referenceData.sourcePubkey,
           to: this.getAccount(),
           executionCondition: output.referenceData.executionCondition,
           ilp: output.referenceData.ilp,
@@ -72,7 +72,7 @@ module.exports = class PluginChain extends EventEmitter {
 
     const feed = await this._client.transactionFeeds.create({
       alias: this._key.pubkey,
-      filter: `outputs(asset_id='${this._assetId}' AND reference_data.to='${this.getAccount()}')`
+      filter: `outputs(asset_id='${this._assetId}' AND reference_data.destinationPubkey='${this._key.pubkey}')`
     })
 
     const processingLoop = (tx, next, done, fail) => {
@@ -227,14 +227,15 @@ module.exports = class PluginChain extends EventEmitter {
       utxoData: {
         // TODO minimize the data sent here
         id: transfer.id,
-        from: transfer.from,
-        to: transfer.to,
+        sourcePubkey: this._key.pubkey,
+        destinationPubkey: destination.pubkey,
         ilp: transfer.ilp,
         executionCondition: transfer.executionCondition,
         expiresAt: transfer.expiresAt,
-        custom: transfer.custom
+        custom: transfer.custom,
+        // TODO can this be put into "local" data?
+        noteToSelf: transfer.noteToSelf
       }
-      // TODO handle noteToSelf
     })
     debug(`sent conditional transfer ${transfer.id}, utxo: ${escrowUtxo.id}`)
     // TODO start timer for when we can reclaim the transfer if it expires
