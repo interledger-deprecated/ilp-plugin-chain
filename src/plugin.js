@@ -24,6 +24,7 @@ module.exports = class PluginChain extends EventEmitter {
     this._connected = false
     this._receiver = null
     this._key = null
+    this._expiryWatchers = {}
   }
 
   async _handleNotification (tx) {
@@ -209,6 +210,20 @@ module.exports = class PluginChain extends EventEmitter {
     }
   }
 
+  async _expireTransfer (escrowUtxo) {
+    debug('attempting to expire transfer:', escrowUtxo.referenceData.id)
+    // TODO handle if the transfer is already fulfilled
+    try {
+      await escrow.timeout({
+        client: this._client,
+        signer: this._signer,
+        escrowUtxo
+      })
+    } catch (err) {
+      debug('error expiring transfer:' + escrowUtxo.referenceData.id, JSON.stringify(err))
+    }
+  }
+
   async sendTransfer (transfer) {
     // TODO ensure transfer id is unique
     debug('sendTransfer', JSON.stringify(transfer))
@@ -238,7 +253,14 @@ module.exports = class PluginChain extends EventEmitter {
       }
     })
     debug(`sent conditional transfer ${transfer.id}, utxo: ${escrowUtxo.id}`)
-    // TODO start timer for when we can reclaim the transfer if it expires
+
+    // Start timer for when transfer expires
+    const expiryWatcher = setTimeout(() => {
+      this._expireTransfer(escrowUtxo)
+      delete this._expiryWatchers[transfer.id]
+    }, moment(transfer.expiresAt).diff(moment()) + 1000) // expire it after the real expiresAt in case chain's clock is different
+    this._expiryWatchers[transfer.id] = expiryWatcher
+
     return null
   }
 

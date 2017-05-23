@@ -58,7 +58,7 @@ async function runTest () {
     }
   }
 
-  receiver.on('incoming_prepare', async function (transfer) {
+  receiver.once('incoming_prepare', async function (transfer) {
     console.log('receiver got incoming prepare notification', transfer)
     console.log('sender balance', await sender.getBalance())
     console.log('receiver balance', await receiver.getBalance())
@@ -75,6 +75,12 @@ async function runTest () {
   })
 
   const transferResult = await sender.sendTransfer(transfer)
+
+  await new Promise((resolve) => setTimeout(resolve, 1000))
+  // this transfer will time out
+  const otherTransfer = await sender.sendTransfer(Object.assign({}, transfer, {
+    id: uuid()
+  }))
 }
 
 runTest().catch(err => console.log(JSON.stringify(err)))
