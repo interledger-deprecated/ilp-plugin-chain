@@ -109,7 +109,8 @@ module.exports = class PluginChain extends EventEmitter {
   }
 
   isConnected () {
-    return true
+    // TODO handle if we lose connection to the server
+    return this._connected
   }
 
   async _createKey () {
@@ -193,8 +194,9 @@ module.exports = class PluginChain extends EventEmitter {
     // TODO
   }
 
-  async _getTransfer (transferId) {
-    debug('_getTransfer', transferId)
+  // Returns transfer or null if transfer does not exist
+  async _getUtxoByTransferId (transferId) {
+    debug('_getUtxoByTransferId', transferId)
     try {
       const queryPage = await this._client.unspentOutputs.query({
         filter: 'asset_id=$1 AND reference_data.id=$2',
@@ -211,14 +213,21 @@ module.exports = class PluginChain extends EventEmitter {
   }
 
   async _expireTransfer (escrowUtxo) {
-    debug('attempting to expire transfer:', escrowUtxo.referenceData.id)
     // TODO handle if the transfer is already fulfilled
+    debug('checking whether we need to expire transfer:', escrowUtxo.referenceData.id)
     try {
-      await escrow.timeout({
+      const utxo = await this._getUtxoByTransferId(escrowUtxo.referenceData.id)
+      if (!utxo) {
+        // don't try to expire transfers that have already been spent
+        debug('transfer was already finalized:', escrowUtxo.referenceData.id)
+        return
+      }
+      const resultTx = await escrow.timeout({
         client: this._client,
         signer: this._signer,
         escrowUtxo
       })
+      debug(`expired transfer: ${escrowUtxo.referenceData.id}, tx: ${resultTx.id}`)
     } catch (err) {
       debug('error expiring transfer:' + escrowUtxo.referenceData.id, JSON.stringify(err))
     }
@@ -255,6 +264,7 @@ module.exports = class PluginChain extends EventEmitter {
     debug(`sent conditional transfer ${transfer.id}, utxo: ${escrowUtxo.id}`)
 
     // Start timer for when transfer expires
+    // TODO: also timeout all other expired holds that belong to us
     const expiryWatcher = setTimeout(() => {
       this._expireTransfer(escrowUtxo)
       delete this._expiryWatchers[transfer.id]
@@ -267,7 +277,7 @@ module.exports = class PluginChain extends EventEmitter {
   async fulfillCondition (transferId, fulfillment) {
     debug(`fulfillCondition for transfer ${transferId} with ${fulfillment}`)
     // TODO check if the transfer is already fulfilled
-    const escrowUtxo = await this._getTransfer(transferId)
+    const escrowUtxo = await this._getUtxoByTransferId(transferId)
     if (!escrowUtxo) {
       // TODO make this a proper ledger plugin error
       throw new Error(`Transfer not found: ${tranfserId}`)
@@ -296,9 +306,10 @@ module.exports = class PluginChain extends EventEmitter {
 
   async rejectIncomingTransfer (transferId, rejectionReason) {
     debug('rejectIncomingTransfer', transferId, rejectionReason)
-    const escrowUtxo = await this._getTransfer(transferId)
+    const escrowUtxo = await this._getUtxoByTransferId(transferId)
     debug('fetched utxo:', escrowUtxo)
     if (!escrowUtxo) {
+      // TODO throw a different error if the transfer existed but was already finalized
       // TODO make this a proper ledger plugin error
       throw new Error(`Transfer not found: ${tranfserId}`)
     }
