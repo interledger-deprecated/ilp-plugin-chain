@@ -194,9 +194,24 @@ module.exports = class PluginChain extends EventEmitter {
     // TODO
   }
 
+  async _getTransactionByTransferId (transferId) {
+    try {
+      const queryPage = await this._client.transactions.query({
+        filter: 'outputs(asset_id=$1 AND reference_data.id=$2)',
+        filterParams: [this._assetId, transferId],
+        pageSize: 100
+      })
+      const transactions = queryPage.items
+      // TODO there should only be one item, handle the case where there are more
+      return transactions[0]
+    } catch (err) {
+      debug(`error getting transaction for transferId: ${transferId}`, err)
+      throw err
+    }
+  }
+
   // Returns transfer or null if transfer does not exist
   async _getUtxoByTransferId (transferId) {
-    debug('_getUtxoByTransferId', transferId)
     try {
       const queryPage = await this._client.unspentOutputs.query({
         filter: 'asset_id=$1 AND reference_data.id=$2',
@@ -207,7 +222,7 @@ module.exports = class PluginChain extends EventEmitter {
       // TODO there should only be one item, handle the case where there are more
       return utxos[0]
     } catch (err) {
-      debug(`error getting transfer ${transferId}`, err)
+      debug(`error getting utxo for transferId: ${transferId}`, err)
       throw err
     }
   }
@@ -234,8 +249,11 @@ module.exports = class PluginChain extends EventEmitter {
   }
 
   async sendTransfer (transfer) {
-    // TODO ensure transfer id is unique
     debug('sendTransfer', JSON.stringify(transfer))
+    const transactionWithSameId = await this._getTransactionByTransferId(transfer.id)
+    if (transactionWithSameId) {
+      throw new Error('Duplicate ID error')
+    }
     const sourceReceiver = await this._createReceiver(transfer.id)
     const destination = this._parseAccount(transfer.to)
     const escrowUtxo = await escrow.create({

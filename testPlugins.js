@@ -76,11 +76,17 @@ async function runTest () {
 
   const transferResult = await sender.sendTransfer(transfer)
 
-  await new Promise((resolve) => setTimeout(resolve, 1000))
-  // this transfer will time out
+  // It will detect if you try to submit a duplicate transaction
+  try {
+    const transfer2 = await sender.sendTransfer(transfer)
+  } catch (e) {
+    console.log('avoided submitting duplicate transaction')
+  }
+
+  // Send a transfer that we'll let time out
   const otherTransfer = await sender.sendTransfer(Object.assign({}, transfer, {
     id: uuid()
   }))
 }
 
-runTest().catch(err => console.log(JSON.stringify(err)))
+runTest().catch(err => console.log(err))
