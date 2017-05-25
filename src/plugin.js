@@ -19,12 +19,14 @@ module.exports = class PluginChain extends EventEmitter {
     this._signer = opts.signer || new chain.HsmSigner(opts.signerOpts)
     this._assetAlias = opts.assetAlias
     this._assetId = opts.assetId
-    this._prefix = opts.chainCorePrefix + this._assetId + '.'
     this._accountAlias = opts.accountAlias
     this._accountId = opts.accountId
-    this._address = opts.address || this._prefix + this._accountId
+    this._privateChainInstance = (opts.private !== true)
 
     this._connected = false
+    this._prefix = null
+    this._info = null
+    this._address = null
     this._receiver = null
     this._key = null
     this._transactionFeedAlias = null
@@ -35,6 +37,9 @@ module.exports = class PluginChain extends EventEmitter {
     // TODO make sure we reclaim all the previous escrows that expired
     debug('connect called')
     try {
+      this._info = await this._getChainInfo()
+      this._prefix = this._info.prefix
+      this._address = this._prefix + this._accountId
       this._receiver = await this._createReceiver()
       this._key = await this._createKey()
       await this._listenForNotifications()
@@ -49,9 +54,13 @@ module.exports = class PluginChain extends EventEmitter {
   }
 
   async disconnect () {
-    await this._client.transactionFeeds.delete({
-      alias: this._transactionFeedAlias
-    })
+    try {
+      await this._client.transactionFeeds.delete({
+        alias: this._transactionFeedAlias
+      })
+    } catch (e) {
+      // not our problem if we can't remove the feed
+    }
     this._connected = false
     this.emit('disconnect')
   }
@@ -67,11 +76,7 @@ module.exports = class PluginChain extends EventEmitter {
   }
 
   getInfo () {
-    return {
-      prefix: this._prefix,
-      currencyScale: 0,
-      currencyCode: this._assetAlias
-    }
+    return this._info
   }
 
   async getBalance () {
@@ -251,6 +256,32 @@ module.exports = class PluginChain extends EventEmitter {
     }
     this.emit('incoming_message', message)
     // TODO responses could be implemented by rejecting the transfer
+  }
+
+  async _getChainInfo () {
+    try {
+      const info = await this._client.config.info()
+      let scheme
+      if (info.isProduction) {
+        if (this._privateChainInstance) {
+          scheme = 'private.'
+        } else {
+          scheme = 'g.'
+        }
+      } else {
+        scheme = 'test.'
+      }
+      const ledgerPrefix = scheme + 'chain.' + info.blockchainId + '.' + this._assetId + '.'
+      return {
+        prefix: ledgerPrefix,
+        currencyScale: 0,
+        currencyCode: this._assetAlias,
+        connectors: []
+      }
+    } catch (err) {
+      debug('error getting chain config info:', err)
+      throw new Error('error getting chain config info: ' + err.message)
+    }
   }
 
   async _createKey () {
@@ -437,7 +468,7 @@ module.exports = class PluginChain extends EventEmitter {
     if (!feed) {
       try {
         feed = await this._client.transactionFeeds.get({
-          alias: this.transactionFeedAlias
+          alias: this._transactionFeedAlias
         })
         debug('using existing transaction feed')
       } catch (err) {
