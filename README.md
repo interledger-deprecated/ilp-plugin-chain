@@ -1,11 +1,8 @@
 # ilp-plugin-chain
-> Interledger.js Ledger Plugin for [Chain Core](https://chain.com/)
+> Interledger.js Ledger Plugin for Chain Core
 
-<img src="./images/chain.png" alt="Chain Core" height="50px" />
-&nbsp;
-<img src="./images/plus.png" height="45" />
-&nbsp;
-<img src="./images/interledgerjs.png" alt="Interledger.js" height="50px" />
+<a href="https://chain.com"><img src="./images/chain.png" alt="Chain Core" height="50px" /></a><img height="45" hspace="5" /><img src="./images/plus.png" height="45" /><img height="45" hspace="5" /><a href="https://interledger.org"><img src="./images/interledgerjs.png" alt="Interledger.js" height="50px" /></a>
+
 
 This plugin enables [Interledger](https://interledger.org) payments through [Chain Core](https://chain.com).
 
@@ -27,4 +24,16 @@ cd ilp-plugin-chain
 npm link chain-sdk
 npm install
 ```
+
+## Usage
+
+Run the [example script](./examples/pluginFunctionality.js) to see the plugin in action. (Note: you'll need to modify the plugin configuration to match your local Chain Core instance)
+
+## How It Works
+
+This plugin uses an [Ivy](https://chain.com/docs/1.2/ivy-playground/tutorial) smart contract ([source](./src/escrow.js#L7-L25)) to escrow senders' funds and implement conditional transfers, as required for [Interledger payments](https://github.com/interledger/rfcs/blob/master/0001-interledger-architecture/0001-interledger-architecture.md). Receivers can use the plugin to get notifications about incoming transfers and fulfill the transfer condition with a valid preimage.
+
+By implementing all of the functions required by the [Ledger Plugin Interface](https://github.com/interledger/rfcs/blob/master/0004-ledger-plugin-interface/0004-ledger-plugin-interface.md), this allows Chain Core to be used by standard Interledger.js components.
+
+For more information about how Interledger works, see [IL-RFC 1: Interledger Architecture](https://github.com/interledger/rfcs/blob/master/0001-interledger-architecture/0001-interledger-architecture.md).
 
