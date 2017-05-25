@@ -27,42 +27,6 @@ const FULFILL_CLAUSE = '0000000000000000'
 const REJECT_CLAUSE =  '0100000000000000'
 const TIMEOUT_CLAUSE = '0200000000000000'
 
-async function verify ({
-  client,
-  sourceReceiver,
-  destinationPubkey,
-  amount,
-  assetId,
-  expiresAt,
-  condition,
-  utxo
-}) {
-  let compiled
-  try {
-    compiled = await client.ivy.compile({
-      contract: ESCROW_CONTRACT_SOURCE,
-      args: [{
-        string: sourceReceiver.controlProgram
-      }, {
-        string: destinationPubkey
-      }, {
-        string: condition
-      }, {
-        integer: expiresAt.valueOf()
-      }]
-    })
-  } catch (err) {
-    debug('error reconstructing escrow contract', err)
-    throw err
-  }
-  const controlProgram = compiled.program
-  debug('recompiled contract', controlProgram)
-  assert(utxo.controlProgram === controlProgram, 'escrow contract is not an interledger transfer or has the wrong parameters: ' + controlProgram)
-  assert(moment().isBefore(expiresAt), 'escrow has already expired')
-  debug('verified that control program matches what we expect')
-  // TODO do we need to check the expiry of the control program?
-}
-
 async function create ({
   client,
   signer,
@@ -118,6 +82,42 @@ async function create ({
   return utxo
 }
 
+async function verify ({
+  client,
+  sourceReceiver,
+  destinationPubkey,
+  amount,
+  assetId,
+  expiresAt,
+  condition,
+  utxo
+}) {
+  let compiled
+  try {
+    compiled = await client.ivy.compile({
+      contract: ESCROW_CONTRACT_SOURCE,
+      args: [{
+        string: sourceReceiver.controlProgram
+      }, {
+        string: destinationPubkey
+      }, {
+        string: condition
+      }, {
+        integer: expiresAt.valueOf()
+      }]
+    })
+  } catch (err) {
+    debug('error reconstructing escrow contract', err)
+    throw err
+  }
+  const controlProgram = compiled.program
+  debug('recompiled contract', controlProgram)
+  assert(utxo.controlProgram === controlProgram, 'escrow contract is not an interledger transfer or has the wrong parameters: ' + controlProgram)
+  assert(moment().isBefore(expiresAt), 'escrow has already expired')
+  debug('verified that control program matches what we expect')
+  // TODO do we need to check the expiry of the control program?
+}
+
 async function fulfill ({
   client,
   signer,
@@ -148,8 +148,8 @@ async function fulfill ({
     quorum: 1,
     signatures: []
   }, {
-    type: 'data', // fulfill clause
-    value: '0000000000000000'
+    type: 'data',
+    value: FULFILL_CLAUSE
   }]
 
   const maxtimes = [
@@ -198,7 +198,7 @@ async function reject ({
     signatures: []
   }, {
     type: 'data',
-    value: '0100000000000000' // reject clause
+    value: REJECT_CLAUSE
   }]
 
   const maxtimes = []
@@ -235,7 +235,7 @@ async function timeout ({
 
   const witness = [{
     type: 'data',
-    value: '0200000000000000' // timeout clause
+    value: TIMEOUT_CLAUSE
   }]
   const maxtimes = []
   const mintimes = [
@@ -262,5 +262,4 @@ exports.verify = verify
 exports.FULFILL_CLAUSE = FULFILL_CLAUSE
 exports.REJECT_CLAUSE = REJECT_CLAUSE
 exports.TIMEOUT_CLAUSE = TIMEOUT_CLAUSE
-
 

@@ -13,8 +13,8 @@ module.exports = class PluginChain extends EventEmitter {
   constructor (opts) {
     super()
 
-    this._client = opts.client || new chain.Client()
-    this._signer = opts.signer || new chain.HsmSigner()
+    this._client = opts.client || new chain.Client(opts.clientOpts)
+    this._signer = opts.signer || new chain.HsmSigner(opts.signerOpts)
     this._assetAlias = opts.assetAlias
     this._assetId = opts.assetId
     this._prefix = opts.chainCorePrefix + this._assetId + '.'
@@ -25,7 +25,232 @@ module.exports = class PluginChain extends EventEmitter {
     this._connected = false
     this._receiver = null
     this._key = null
+    this._transactionFeedAlias = null
     this._expiryWatchers = {}
+  }
+
+  async connect () {
+    // TODO make sure we reclaim all the previous escrows that expired
+    debug('connect called')
+    try {
+      this._receiver = await this._createReceiver()
+      this._key = await this._createKey()
+      await this._listenForNotifications()
+    } catch (err) {
+      debug('error connecting to chain core:', err)
+      throw new Error('Error connecting client: ' + err.message)
+    }
+    this._connected = true
+    debug('connected')
+    this.emit('connect')
+    return
+  }
+
+  async disconnect () {
+    await this._client.transactionFeeds.delete({
+      alias: this._transactionFeedAlias
+    })
+    this._connected = false
+    this.emit('disconnect')
+  }
+
+  isConnected () {
+    // TODO handle if we lose connection to the server
+    return this._connected
+  }
+
+  getAccount () {
+    assert(this.isConnected(), 'must be connected to getAccount')
+    return this._prefix + this._key.pubkey
+  }
+
+  getInfo () {
+    return {
+      prefix: this._prefix,
+      currencyScale: 0,
+      currencyCode: this._assetAlias
+    }
+  }
+
+  async getBalance () {
+    debug(`requesting ${this._assetAlias} balance for account ${this._accountAlias}`)
+    try {
+      const queryPage = await this._client.unspentOutputs.query({
+        filter: 'account_id=$1 AND asset_id=$2',
+        filterParams: [this._accountId, this._assetId],
+        pageSize: 100
+      })
+      // TODO: handle if this isn't the last page
+      const utxos = queryPage.items
+      const balance = utxos.reduce((balance, utxo) => {
+        return balance + utxo.amount
+      }, 0)
+      return balance
+    } catch (err) {
+      debug('error getting balance', err)
+      throw new Error('Error getting balance: ' + err.message)
+    }
+  }
+
+  async getFulfillment (transferId) {
+    // TODO handle errors finding transactions
+    debug('getFulfillment for transfer:', transferId)
+    const originalTransaction = await this._getTransactionByTransferId(transferId)
+    let output
+    for (output of originalTransaction.outputs) {
+      if (output.referenceData.id === transferId) {
+        break
+      }
+    }
+    const fulfillingTransaction = await this._getTransactionSpendingOutput(output.id)
+    let input
+    for (input of fulfillingTransaction.inputs) {
+      if (input.spentOutputId === output.id) {
+        break
+      }
+    }
+
+    if (input.arguments.length !== 3 || input.arguments[2] !== escrow.FULFILL_CLAUSE) {
+      debug(`tried to get fulfillment for escrow that was not fulfilled. original escrow tx: ${originalTransaction.id}, tx that spent output: ${fulfillingTransaction.id}`)
+      throw new Error('Transfer was not fulfilled')
+    }
+
+    // fulfillment is the first argument passed in as the witness
+    return base64url.encode(input.arguments[0], 'hex')
+  }
+
+  async sendTransfer (transfer) {
+    debug('sendTransfer', JSON.stringify(transfer))
+    const transactionWithSameId = await this._getTransactionByTransferId(transfer.id)
+    if (transactionWithSameId) {
+      throw new Error('Duplicate ID error')
+    }
+    const sourceReceiver = await this._createReceiver(transfer.id)
+    const destinationPubkey = transfer.to.replace(this._prefix, '')
+    const utxoData = {
+      // TODO minimize the data sent here
+      id: transfer.id,
+      sourcePubkey: this._key.pubkey,
+      destinationPubkey,
+      ilp: transfer.ilp,
+      executionCondition: transfer.executionCondition,
+      expiresAt: transfer.expiresAt,
+      custom: transfer.custom,
+      // TODO can this be put into "local" data?
+      noteToSelf: transfer.noteToSelf
+    }
+    const escrowUtxo = await escrow.create({
+      client: this._client,
+      signer: this._signer,
+      assetId: this._assetId,
+      sourceAccountId: this._accountId,
+      sourceReceiver,
+      destinationPubkey,
+      amount: transfer.amount,
+      expiresAt: new Date(transfer.expiresAt),
+      condition: base64url.decode(transfer.executionCondition, 'hex'),
+      utxoData
+    })
+    debug(`sent conditional transfer ${transfer.id}, utxo: ${escrowUtxo.id}`)
+
+    // Start timer for when transfer expires
+    // TODO: also timeout all other expired holds that belong to us
+    const expiryWatcher = setTimeout(() => {
+      this._expireTransfer(escrowUtxo)
+      delete this._expiryWatchers[transfer.id]
+    }, moment(transfer.expiresAt).diff(moment()) + 1000) // expire it after the real expiresAt in case chain's clock is different
+    this._expiryWatchers[transfer.id] = expiryWatcher
+
+    return null
+  }
+
+  async fulfillCondition (transferId, fulfillment) {
+    debug(`fulfillCondition for transfer ${transferId} with ${fulfillment}`)
+    // TODO check if the transfer is already fulfilled
+    const escrowUtxo = await this._getUtxoByTransferId(transferId)
+    if (!escrowUtxo) {
+      // TODO make this a proper ledger plugin error
+      throw new Error(`Transfer not found: ${tranfserId}`)
+    }
+    const destinationReceiver = await this._createReceiver(transferId)
+    try {
+      const fulfillTx = await escrow.fulfill({
+        client: this._client,
+        signer: this._signer,
+        fulfillment: base64url.decode(fulfillment, 'hex'),
+        expiresAt: escrowUtxo.referenceData.expiresAt,
+        destinationKey: {
+          xpub: this._key.rootXpub,
+          derivationPath: this._key.pubkeyDerivationPath
+        },
+        destinationReceiver,
+        escrowUtxo
+      })
+      debug(`fulfilled transfer ${transferId} with tx: ${fulfillTx.id}`)
+      return null
+    } catch (err) {
+      debug(`error fulfilling transfer ${transferId}`, err)
+      throw err
+    }
+  }
+
+  async rejectIncomingTransfer (transferId, rejectionReason) {
+    debug('rejectIncomingTransfer', transferId, rejectionReason)
+    const escrowUtxo = await this._getUtxoByTransferId(transferId)
+    debug('fetched utxo:', escrowUtxo)
+    if (!escrowUtxo) {
+      // TODO throw a different error if the transfer existed but was already finalized
+      // TODO make this a proper ledger plugin error
+      throw new Error(`Transfer not found: ${tranfserId}`)
+    }
+    try {
+      const rejectTx = await escrow.reject({
+        client: this._client,
+        signer: this._signer,
+        destinationKey: {
+          xpub: this._key.rootXpub,
+          derivationPath: this._key.pubkeyDerivationPath
+        },
+        escrowUtxo,
+        inputData: rejectionReason
+      })
+      debug(`rejected transfer ${transferId} with tx: ${rejectTx.id}`)
+      return null
+    } catch (err) {
+      debug(`error rejecting transfer ${transferId}`, err)
+      throw err
+    }
+  }
+
+  async sendMessage (message) {
+    // TODO
+  }
+
+  async _createKey () {
+    // TODO make this work with the real HSM
+    debug('creating new key')
+    const key = await this._client.accounts.createPubkey({
+      accountId: this._accountId
+    })
+    // rename fields to make them work with other parts of the chain SDK
+    this._signer.addKey(key.rootXpub, this._client.mockHsm.signerConnection)
+    debug('created key', key)
+    return key
+  }
+
+  async _createReceiver (alias) {
+    debug('creating new receiver with alias: ', alias)
+    try {
+      const receiver = await this._client.accounts.createReceiver({
+        accountId: this._accountId,
+        alias: alias ? alias : undefined
+      })
+      debug('created new receiver with alias:', alias, receiver)
+      return receiver
+    } catch (err) {
+      debug('error creating receiver', err)
+      throw err
+    }
   }
 
   _outputIsForUs (output) {
@@ -159,12 +384,15 @@ module.exports = class PluginChain extends EventEmitter {
     const filter = `(inputs(asset_id='${this._assetId}') OR outputs(asset_id='${this._assetId}'))`
     // TODO is there a way to limit the time to transactions after now?
     // TODO should the alias be pubkey or assetId? we don't want other parties to change what the feed is listening to
-    const alias = this._assetId + '/' + this._key.pubkey
+    this._transactionFeedAlias = this._key.pubkey + '/' + this._assetId
 
     // TODO should we use a transactionFeed or just plain transaction queries? we don't want exponential backoff, because we might miss a notification
     let feed
     try {
-      feed = await this._client.transactionFeeds.create({ alias, filter })
+      feed = await this._client.transactionFeeds.create({
+        alias: this._transactionFeedAlias,
+        filter
+      })
       debug('created new transaction feed')
     } catch (err) {
       if (err.message.indexOf('CH002') !== -1) {
@@ -174,7 +402,9 @@ module.exports = class PluginChain extends EventEmitter {
     }
     if (!feed) {
       try {
-        feed = await this._client.transactionFeeds.get({ alias })
+        feed = await this._client.transactionFeeds.get({
+          alias: this.transactionFeedAlias
+        })
         debug('using existing transaction feed')
       } catch (err) {
         debug('error getting transaction feed', err)
@@ -191,139 +421,10 @@ module.exports = class PluginChain extends EventEmitter {
         })
     }
     feed.consume(processingLoop)
-      .catch(err => debug('error consuming feed', err))
-  }
-
-  async connect () {
-    // TODO make sure we reclaim all the previous escrows that expired
-    debug('connect called')
-    try {
-      this._receiver = await this._createReceiver()
-      this._key = await this._createKey()
-      await this._listenForNotifications()
-    } catch (err) {
-      debug('error connecting to chain core:', err)
-      throw new Error('Error connecting client: ' + err.message)
-    }
-    this._connected = true
-    debug('connected')
-    return
-  }
-
-  async disconnect () {
-    // TODO: clean up if necessary
-    await this._feed.delete({
-      alias: this._key.pubkey
-    })
-  }
-
-  isConnected () {
-    // TODO handle if we lose connection to the server
-    return this._connected
-  }
-
-  async _createKey () {
-    // TODO make this work with the real HSM
-    debug('creating new key')
-    const key = await this._client.accounts.createPubkey({
-      accountId: this._accountId
-    })
-    // rename fields to make them work with other parts of the chain SDK
-    this._signer.addKey(key.rootXpub, this._client.mockHsm.signerConnection)
-    debug('created key', key)
-    return key
-  }
-
-  async _createReceiver (alias) {
-    debug('creating new receiver with alias: ', alias)
-    try {
-      const receiver = await this._client.accounts.createReceiver({
-        accountId: this._accountId,
-        alias: alias ? alias : undefined
+      .catch(err => {
+        this.disconnect()
+        debug('error consuming feed', err)
       })
-      debug('created new receiver with alias:', alias, receiver)
-      return receiver
-    } catch (err) {
-      debug('error creating receiver', err)
-      throw err
-    }
-  }
-
-  getAccount () {
-    assert(this.isConnected(), 'must be connected to getAccount')
-    return this._prefix
-      + this._key.pubkey
-  }
-
-  _parseAccount (address) {
-    debug('parse address', address)
-    const split = address.split('.')
-    const length = split.length
-    try {
-      const parsed = {
-        prefix: split.slice(0, length - 2).join('.') + '.',
-        pubkey: split[length - 1]
-      }
-      return parsed
-    } catch (err) {
-      debug(`error parsing address ${address}`, err)
-      throw new Error(`Cannot understand 'to' address ${address} ${err.message}`)
-    }
-  }
-
-  getInfo () {
-    return {
-      prefix: this._prefix,
-      currencyScale: 0,
-      currencyCode: this._assetAlias
-    }
-  }
-
-  async getBalance () {
-    debug(`requesting ${this._assetAlias} balance for account ${this._accountAlias}`)
-    try {
-      const queryPage = await this._client.unspentOutputs.query({
-        filter: 'account_id=$1 AND asset_id=$2',
-        filterParams: [this._accountId, this._assetId],
-        pageSize: 100
-      })
-      // TODO: handle if this isn't the last page
-      const utxos = queryPage.items
-      const balance = utxos.reduce((balance, utxo) => {
-        return balance + utxo.amount
-      }, 0)
-      return balance
-    } catch (err) {
-      debug('error getting balance', err)
-      throw new Error('Error getting balance: ' + err.message)
-    }
-  }
-
-  async getFulfillment (transferId) {
-    // TODO handle errors finding transactions
-    debug('getFulfillment for transfer:', transferId)
-    const originalTransaction = await this._getTransactionByTransferId(transferId)
-    let output
-    for (output of originalTransaction.outputs) {
-      if (output.referenceData.id === transferId) {
-        break
-      }
-    }
-    const fulfillingTransaction = await this._getTransactionSpendingOutput(output.id)
-    let input
-    for (input of fulfillingTransaction.inputs) {
-      if (input.spentOutputId === output.id) {
-        break
-      }
-    }
-
-    if (input.arguments.length !== 3 || input.arguments[2] !== '0000000000000000') {
-      debug(`tried to get fulfillment for escrow that was not fulfilled. original escrow tx: ${originalTransaction.id}, tx that spent output: ${fulfillingTransaction.id}`)
-      throw new Error('Transfer was not fulfilled')
-    }
-
-    // fulfillment is the first argument passed in as the witness
-    return base64url.encode(input.arguments[0], 'hex')
   }
 
   async _getTransactionWithOutput (outputId) {
@@ -413,111 +514,5 @@ module.exports = class PluginChain extends EventEmitter {
     } catch (err) {
       debug('error expiring transfer:' + escrowUtxo.referenceData.id, JSON.stringify(err))
     }
-  }
-
-  async sendTransfer (transfer) {
-    debug('sendTransfer', JSON.stringify(transfer))
-    const transactionWithSameId = await this._getTransactionByTransferId(transfer.id)
-    if (transactionWithSameId) {
-      throw new Error('Duplicate ID error')
-    }
-    const sourceReceiver = await this._createReceiver(transfer.id)
-    const destination = this._parseAccount(transfer.to)
-    const escrowUtxo = await escrow.create({
-      client: this._client,
-      signer: this._signer,
-      assetId: this._assetId,
-      sourceAccountId: this._accountId,
-      sourceReceiver,
-      destinationPubkey: destination.pubkey,
-      amount: transfer.amount,
-      expiresAt: new Date(transfer.expiresAt),
-      condition: base64url.decode(transfer.executionCondition, 'hex'),
-      utxoData: {
-        // TODO minimize the data sent here
-        id: transfer.id,
-        sourcePubkey: this._key.pubkey,
-        destinationPubkey: destination.pubkey,
-        ilp: transfer.ilp,
-        executionCondition: transfer.executionCondition,
-        expiresAt: transfer.expiresAt,
-        custom: transfer.custom,
-        // TODO can this be put into "local" data?
-        noteToSelf: transfer.noteToSelf
-      }
-    })
-    debug(`sent conditional transfer ${transfer.id}, utxo: ${escrowUtxo.id}`)
-
-    // Start timer for when transfer expires
-    // TODO: also timeout all other expired holds that belong to us
-    const expiryWatcher = setTimeout(() => {
-      this._expireTransfer(escrowUtxo)
-      delete this._expiryWatchers[transfer.id]
-    }, moment(transfer.expiresAt).diff(moment()) + 1000) // expire it after the real expiresAt in case chain's clock is different
-    this._expiryWatchers[transfer.id] = expiryWatcher
-
-    return null
-  }
-
-  async fulfillCondition (transferId, fulfillment) {
-    debug(`fulfillCondition for transfer ${transferId} with ${fulfillment}`)
-    // TODO check if the transfer is already fulfilled
-    const escrowUtxo = await this._getUtxoByTransferId(transferId)
-    if (!escrowUtxo) {
-      // TODO make this a proper ledger plugin error
-      throw new Error(`Transfer not found: ${tranfserId}`)
-    }
-    const destinationReceiver = await this._createReceiver(transferId)
-    try {
-      const fulfillTx = await escrow.fulfill({
-        client: this._client,
-        signer: this._signer,
-        fulfillment: base64url.decode(fulfillment, 'hex'),
-        expiresAt: escrowUtxo.referenceData.expiresAt,
-        destinationKey: {
-          xpub: this._key.rootXpub,
-          derivationPath: this._key.pubkeyDerivationPath
-        },
-        destinationReceiver,
-        escrowUtxo
-      })
-      debug(`fulfilled transfer ${transferId} with tx: ${fulfillTx.id}`)
-      return null
-    } catch (err) {
-      debug(`error fulfilling transfer ${transferId}`, err)
-      throw err
-    }
-  }
-
-  async rejectIncomingTransfer (transferId, rejectionReason) {
-    debug('rejectIncomingTransfer', transferId, rejectionReason)
-    const escrowUtxo = await this._getUtxoByTransferId(transferId)
-    debug('fetched utxo:', escrowUtxo)
-    if (!escrowUtxo) {
-      // TODO throw a different error if the transfer existed but was already finalized
-      // TODO make this a proper ledger plugin error
-      throw new Error(`Transfer not found: ${tranfserId}`)
-    }
-    try {
-      const rejectTx = await escrow.reject({
-        client: this._client,
-        signer: this._signer,
-        destinationKey: {
-          xpub: this._key.rootXpub,
-          derivationPath: this._key.pubkeyDerivationPath
-        },
-        escrowUtxo,
-        inputData: rejectionReason
-      })
-      debug(`rejected transfer ${transferId} with tx: ${rejectTx.id}`)
-      return null
-    } catch (err) {
-      debug(`error rejecting transfer ${transferId}`, err)
-      throw err
-    }
-  }
-
-  async sendMessage (message) {
-    // TODO
   }
 }

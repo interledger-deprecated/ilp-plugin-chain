@@ -24,6 +24,9 @@ async function runTest () {
     assetAlias: 'Gold',
     assetId: '5ae7151dfefd6c8ab0010745b921caf2ace001c0cd447c66e55e85e44b3cba25',
     chainCorePrefix: 'test.chain.',
+    clientOpts: {
+      url: 'http://localhost:1999'
+    }
   })
 
   const receiver = new PluginChain({
@@ -32,6 +35,9 @@ async function runTest () {
     assetAlias: 'Gold',
     assetId: '5ae7151dfefd6c8ab0010745b921caf2ace001c0cd447c66e55e85e44b3cba25',
     chainCorePrefix: 'test.chain.',
+    clientOpts: {
+      url: 'http://localhost:1999'
+    }
   })
 
   await sender.connect()
@@ -127,6 +133,11 @@ async function runTest () {
   })
   await rejectedPromise
   console.log(`sender balance is: ${await sender.getBalance()}, receiver balance is: ${await receiver.getBalance()}`)
+
+  await sender.disconnect()
+  await receiver.disconnect()
+  console.log('disconnected plugins')
+  process.exit()
 }
 
 runTest().catch(err => console.log(err))
