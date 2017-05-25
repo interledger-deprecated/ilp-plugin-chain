@@ -1,4 +1,4 @@
-const PluginChain = require('../src/plugin')
+const PluginChain = require('../')
 const crypto = require('crypto')
 const moment = require('moment')
 const uuid = require('uuid/v4')
@@ -20,10 +20,9 @@ console.log('condition: ', condition, 'fulfillment:', fulfillment)
 async function runTest () {
   const sender = new PluginChain({
     accountAlias: 'Alice',
-    accountId: 'acc0X0T5TNT008KW',
+    accountId: 'acc0X1RJTW1008Z0',
     assetAlias: 'Gold',
-    assetId: '5ae7151dfefd6c8ab0010745b921caf2ace001c0cd447c66e55e85e44b3cba25',
-    chainCorePrefix: 'test.chain.',
+    assetId: '1fbad4676a71a8326a754422e62e768bada294c324ad91ab481ab241bb48a3d6',
     clientOpts: {
       url: 'http://localhost:1999'
     }
@@ -31,10 +30,9 @@ async function runTest () {
 
   const receiver = new PluginChain({
     accountAlias: 'Bob',
-    accountId: 'acc0X0T5TNS008KT',
+    accountId: 'acc0X1RJTVS008YW',
     assetAlias: 'Gold',
-    assetId: '5ae7151dfefd6c8ab0010745b921caf2ace001c0cd447c66e55e85e44b3cba25',
-    chainCorePrefix: 'test.chain.',
+    assetId: '1fbad4676a71a8326a754422e62e768bada294c324ad91ab481ab241bb48a3d6',
     clientOpts: {
       url: 'http://localhost:1999'
     }
