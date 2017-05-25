@@ -238,7 +238,7 @@ module.exports = class PluginChain extends EventEmitter {
       expiresAt: moment().add(10, 'seconds')
     }
     const sendTx = await this.sendTransfer(transfer)
-    debug(`sent message as ledger tx: ${sendTx.id}`, message)
+    debug('sent message as ledger tx:', sendTx, message)
   }
 
   async _handleLedgerMessage (transfer) {
