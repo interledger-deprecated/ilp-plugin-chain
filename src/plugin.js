@@ -73,19 +73,49 @@ module.exports = class PluginChain extends EventEmitter {
           if (output.id === input.spentOutputId) {
 
             const transfer = this._parseTransferFromOutput(output)
-            const witness = input.arguments
-
-            if (witness.length === 3 && witness[2] === escrow.FULFILL_CLAUSE) {
-              const fulfillment = base64url.encode(witness[0], 'hex')
-              const direction = this._outputIsForUs(output)
-                ? 'incoming'
-                : 'outgoing'
-              debug(`emitting ${direction}_fulfill:`, transfer, fulfillment)
-              this.emit(direction + '_fulfill', transfer, fulfillment)
-            } else if (witness.length === 1 && witness[0] === escrow.TIMEOUT_CLAUSE) {
-              // TODO handle incoming_reject
+            let direction
+            if (this._outputIsForUs(output)) {
+              direction = 'incoming'
+            } else if (this._outputIsFromUs(output)) {
+              direction = 'outgoing'
             } else {
-              // TODO handle timeout
+              break
+            }
+            const witness = input.arguments
+            // The last part of the witness says which contract clause is being met
+            const clause = witness[witness.length - 1]
+
+            switch (clause) {
+              case escrow.FULFILL_CLAUSE:
+                const fulfillment = base64url.encode(witness[0], 'hex')
+                debug(`emitting ${direction}_fulfill:`, transfer, fulfillment)
+                this.emit(direction + '_fulfill', transfer, fulfillment)
+                break
+              case escrow.REJECT_CLAUSE:
+                const inputReferenceData = input.referenceData && input.referenceData || {}
+                const rejectionMessage = {
+                  code: inputReferenceData.code,
+                  name: inputReferenceData.name,
+                  message: inputReferenceData.message,
+                  triggeredBy: inputReferenceData.triggeredBy,
+                  triggeredAt: inputReferenceData.triggeredAt
+                }
+                debug(`emitting ${direction}_reject (rejected by destination):`, transfer, rejectionMessage)
+                this.emit(direction + '_reject', transfer, rejectionMessage)
+                break
+              case escrow.TIMEOUT_CLAUSE:
+                const timeoutMessage = {
+                  code: 'R01',
+                  name: 'Transfer Timed Out',
+                  message: 'transfer timed out',
+                  triggeredBy: this._address,
+                  triggeredAt: (new Date()).toISOString()
+                }
+                debug(`emitting ${direction}_reject (transfer expired):`, transfer, timeoutMessage)
+                this.emit(direction + '_reject', transfer, timeoutMessage)
+                break
+              default:
+                break
             }
           }
         }
@@ -451,7 +481,7 @@ module.exports = class PluginChain extends EventEmitter {
         destinationReceiver,
         escrowUtxo
       })
-      debug(`fulfilled transfer ${transferId}`, fulfillTx)
+      debug(`fulfilled transfer ${transferId} with tx: ${fulfillTx.id}`)
       return null
     } catch (err) {
       debug(`error fulfilling transfer ${transferId}`, err)
@@ -477,11 +507,9 @@ module.exports = class PluginChain extends EventEmitter {
           derivationPath: this._key.pubkeyDerivationPath
         },
         escrowUtxo,
-        globalData: {
-          rejectionReason
-        }
+        inputData: rejectionReason
       })
-      debug(`rejected transfer ${transferId}`, fulfillTx)
+      debug(`rejected transfer ${transferId} with tx: ${rejectTx.id}`)
       return null
     } catch (err) {
       debug(`error rejecting transfer ${transferId}`, err)

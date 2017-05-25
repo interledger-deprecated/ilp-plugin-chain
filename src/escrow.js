@@ -174,11 +174,13 @@ async function reject ({
   escrowUtxo,
   destinationKey,
   utxoData,
+  inputData,
   transactionData
 }) {
   const actions = [{
     type: 'spendUnspentOutput',
-    outputId: escrowUtxo.id
+    outputId: escrowUtxo.id,
+    referenceData: inputData
   }, {
     type: 'controlWithReceiver',
     amount: escrowUtxo.amount,
