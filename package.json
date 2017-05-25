@@ -13,9 +13,7 @@
     "chain-sdk": "^1.2.1",
     "debug": "^2.6.8",
     "eventemitter3": "^2.0.3",
-    "moment": "^2.18.1"
-  },
-  "devDependencies": {
+    "moment": "^2.18.1",
     "uuid": "^3.0.1"
   }
 }

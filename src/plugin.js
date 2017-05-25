@@ -6,8 +6,10 @@ const EventEmitter = require('eventemitter3')
 const assert = require('assert')
 const moment = require('moment')
 const base64url = require('base64url')
+const uuid = require('uuid')
 
 const escrow = require('./escrow')
+const MESSAGE_STRING = 'messagemessagemessagemessagemessagemessagem='
 
 module.exports = class PluginChain extends EventEmitter {
   constructor (opts) {
@@ -223,7 +225,32 @@ module.exports = class PluginChain extends EventEmitter {
   }
 
   async sendMessage (message) {
-    // TODO
+    // for now this sends messages as ledger transfers that the receiver won't be able to fulfill
+    // TODO replace ledger messaging with another type of messaging
+    const transfer = {
+      id: uuid(),
+      from: this.getAccount(),
+      to: message.to,
+      ledger: this._prefix,
+      amount: 1,
+      executionCondition: MESSAGE_STRING,
+      custom: message.data,
+      expiresAt: moment().add(10, 'seconds')
+    }
+    const sendTx = await this.sendTransfer(transfer)
+    debug(`sent message as ledger tx: ${sendTx.id}`, message)
+  }
+
+  async _handleLedgerMessage (transfer) {
+    // TODO verify this came from the "from" account
+    const message = {
+      from: transfer.from,
+      to: transfer.to,
+      ledger: this._prefix,
+      data: transfer.custom
+    }
+    this.emit('incoming_message', message)
+    // TODO responses could be implemented by rejecting the transfer
   }
 
   async _createKey () {
@@ -352,6 +379,14 @@ module.exports = class PluginChain extends EventEmitter {
     // that means some transaction we were involved in was prepared
     for (let output of tx.outputs) {
       if (this._outputIsForUs(output)) {
+        const transfer = this._parseTransferFromOutput(output)
+
+        // intercept ledger messages
+        if (transfer.executionCondition === MESSAGE_STRING) {
+          this._handleLedgerMessage(transfer)
+          break
+        }
+
         // check that the incoming transfer is locked with the right control program
         await escrow.verify({
           utxo: output,
@@ -365,7 +400,6 @@ module.exports = class PluginChain extends EventEmitter {
           condition: base64url.decode(output.referenceData.executionCondition, 'hex')
         })
         // TODO check that all the referenceData we expect is there
-        const transfer = this._parseTransferFromOutput(output)
         debug('emitting incoming_prepare', transfer)
         try {
           this.emit('incoming_prepare', transfer)

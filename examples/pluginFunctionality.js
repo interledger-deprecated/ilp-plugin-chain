@@ -1,4 +1,4 @@
-const PluginChain = require('./src/plugin')
+const PluginChain = require('../src/plugin')
 const crypto = require('crypto')
 const moment = require('moment')
 const uuid = require('uuid/v4')
@@ -133,6 +133,21 @@ async function runTest () {
   })
   await rejectedPromise
   console.log(`sender balance is: ${await sender.getBalance()}, receiver balance is: ${await receiver.getBalance()}`)
+
+  console.log('plugins can also send messages to one another')
+  const messagePromise = new Promise((resolve) => {
+    receiver.once('incoming_message', (message) => {
+      console.log('receiver got message', message)
+      resolve()
+    })
+  })
+  await sender.sendMessage({
+    to: receiver.getAccount(),
+    data: {
+      foo: 'bar'
+    }
+  })
+  await messagePromise
 
   await sender.disconnect()
   await receiver.disconnect()
