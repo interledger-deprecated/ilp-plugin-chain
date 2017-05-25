@@ -28,12 +28,75 @@ module.exports = class PluginChain extends EventEmitter {
     this._expiryWatchers = {}
   }
 
+  _outputIsForUs (output) {
+    return output.referenceData
+      && output.referenceData.destinationPubkey
+      && output.referenceData.destinationPubkey === this._key.pubkey
+  }
+
+  _outputIsFromUs (output) {
+    return output.referenceData
+      && output.referenceData.sourcePubkey
+      && output.referenceData.sourcePubkey === this._key.pubkey
+  }
+
+  _parseTransferFromOutput (output) {
+    // TODO add validation
+    const transfer = {
+      id: output.referenceData.id,
+      amount: output.amount,
+      ledger: this._prefix,
+      // TODO need a field that the sender cannot forge
+      from: this._prefix + output.referenceData.sourcePubkey,
+      to: this.getAccount(),
+      executionCondition: output.referenceData.executionCondition,
+      ilp: output.referenceData.ilp,
+      custom: output.referenceData.custom,
+      expiresAt: output.referenceData.expiresAt
+    }
+
+    if (this._outputIsFromUs(output)) {
+      transfer.noteToSelf = output.referenceData.noteToSelf
+    }
+
+    return transfer
+  }
+
   async _handleNotification (tx) {
-    // TODO is some trick someone can play with multiple outputs?
+    // Handle outgoing_{fulfill,reject} and incoming_{fulfill,reject}
+    // If the transaction we just got notified about spends an output to/from us,
+    // that means some transaction we were involved in was finalized
+    for (let input of tx.inputs) {
+      if (input.spentOutputId) {
+        const originalTransaction = await this._getTransactionWithOutput(input.spentOutputId)
+        for (let output of originalTransaction.outputs) {
+          if (output.id === input.spentOutputId) {
+
+            const transfer = this._parseTransferFromOutput(output)
+            const witness = input.arguments
+
+            if (witness.length === 3 && witness[2] === escrow.FULFILL_CLAUSE) {
+              const fulfillment = base64url.encode(witness[0], 'hex')
+              const direction = this._outputIsForUs(output)
+                ? 'incoming'
+                : 'outgoing'
+              debug(`emitting ${direction}_fulfill:`, transfer, fulfillment)
+              this.emit(direction + '_fulfill', transfer, fulfillment)
+            } else if (witness.length === 1 && witness[0] === escrow.TIMEOUT_CLAUSE) {
+              // TODO handle incoming_reject
+            } else {
+              // TODO handle timeout
+            }
+          }
+        }
+      }
+    }
+
+    // Handle outgoing_prepare and incoming_prepare
+    // If the transaction we just got notified about includes an output to/from us,
+    // that means some transaction we were involved in was prepared
     for (let output of tx.outputs) {
-      // TODO how do we verify the controlProgram used?
-      // TODO what's the right way to determine which output is a) for us and b) related to ilp?
-      if (output.referenceData && output.referenceData.destinationPubkey && output.referenceData.destinationPubkey === this._key.pubkey) {
+      if (this._outputIsForUs(output)) {
         // check that the incoming transfer is locked with the right control program
         await escrow.verify({
           utxo: output,
@@ -47,43 +110,58 @@ module.exports = class PluginChain extends EventEmitter {
           condition: base64url.decode(output.referenceData.executionCondition, 'hex')
         })
         // TODO check that all the referenceData we expect is there
-        const transfer = {
-          id: output.referenceData.id,
-          amount: output.amount,
-          ledger: this._prefix,
-          // TODO need a field that the sender cannot forge
-          from: this._prefix + output.referenceData.sourcePubkey,
-          to: this.getAccount(),
-          executionCondition: output.referenceData.executionCondition,
-          ilp: output.referenceData.ilp,
-          custom: output.referenceData.custom,
-          expiresAt: output.referenceData.expiresAt
-        }
+        const transfer = this._parseTransferFromOutput(output)
         debug('emitting incoming_prepare', transfer)
         try {
           this.emit('incoming_prepare', transfer)
         } catch (err) {
           console.error('error in event handler', err)
         }
+      } else if (this._outputIsFromUs(output)) {
+        const transfer = this._parseTransferFromOutput(output)
+        this.emit('outgoing_prepare', transfer)
       }
     }
   }
 
   async _listenForNotifications () {
-    debug(`subscribing to transactionFeed for asset: ${this._assetId} pubkey: ${this._key.pubkey}`)
+    debug(`subscribing to transactionFeed for asset: ${this._assetId}`)
+    const filter = `(inputs(asset_id='${this._assetId}') OR outputs(asset_id='${this._assetId}'))`
+    // TODO is there a way to limit the time to transactions after now?
+    // TODO should the alias be pubkey or assetId? we don't want other parties to change what the feed is listening to
+    const alias = this._assetId + '/' + this._key.pubkey
 
-    const feed = await this._client.transactionFeeds.create({
-      alias: this._key.pubkey,
-      filter: `outputs(asset_id='${this._assetId}' AND reference_data.destinationPubkey='${this._key.pubkey}')`
-    })
-
+    // TODO should we use a transactionFeed or just plain transaction queries? we don't want exponential backoff, because we might miss a notification
+    let feed
+    try {
+      feed = await this._client.transactionFeeds.create({ alias, filter })
+      debug('created new transaction feed')
+    } catch (err) {
+      if (err.message.indexOf('CH002') !== -1) {
+        debug('error creating transaction feed', err)
+        throw new Error('error creating transaction feed: ' + err.message)
+      }
+    }
+    if (!feed) {
+      try {
+        feed = await this._client.transactionFeeds.get({ alias })
+        debug('using existing transaction feed')
+      } catch (err) {
+        debug('error getting transaction feed', err)
+        throw new Error('error getting transaction feed: ' + err.message)
+      }
+    }
     const processingLoop = (tx, next, done, fail) => {
       // TODO handle errors
       this._handleNotification(tx)
         .then(() => next(true))
-        .catch(err => debug('error processing notification', err))
+        .catch(err => {
+          debug('error processing notification', err)
+          fail(err)
+        })
     }
     feed.consume(processingLoop)
+      .catch(err => debug('error consuming feed', err))
   }
 
   async connect () {
@@ -218,6 +296,22 @@ module.exports = class PluginChain extends EventEmitter {
     return base64url.encode(input.arguments[0], 'hex')
   }
 
+  async _getTransactionWithOutput (outputId) {
+    try {
+      const queryPage = await this._client.transactions.query({
+        filter: 'outputs(asset_id=$1 AND id=$2)',
+        filterParams: [this._assetId, outputId],
+        pageSize: 1
+      })
+      const transactions = queryPage.items
+      // TODO there should only be one item, handle the case where there are more
+      return transactions[0]
+    } catch (err) {
+      debug(`error getting transaction for transferId: ${transferId}`, err)
+      throw err
+    }
+  }
+
   async _getTransactionSpendingOutput (outputId) {
     try {
       const queryPage = await this._client.transactions.query({
@@ -226,6 +320,9 @@ module.exports = class PluginChain extends EventEmitter {
         pageSize: 100
       })
       const transactions = queryPage.items
+      if (transactions.length > 1) {
+        debug('found multiple transactions spending same output id: ', transactions)
+      }
       // TODO there should only be one item, handle the case where there are more
       return transactions[0]
     } catch (err) {

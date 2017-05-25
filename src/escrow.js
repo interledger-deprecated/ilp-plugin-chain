@@ -23,6 +23,9 @@ const ESCROW_CONTRACT_SOURCE =
         lock value with source
       }
     }`
+const FULFILL_CLAUSE = '0000000000000000'
+const REJECT_CLAUSE =  '0100000000000000'
+const TIMEOUT_CLAUSE = '0200000000000000'
 
 async function verify ({
   client,
@@ -34,7 +37,6 @@ async function verify ({
   condition,
   utxo
 }) {
-  debug('check utxo against params', utxo, { sourceReceiver, destinationPubkey, amount, assetId, expiresAt, condition })
   let compiled
   try {
     compiled = await client.ivy.compile({
@@ -55,7 +57,7 @@ async function verify ({
   }
   const controlProgram = compiled.program
   debug('recompiled contract', controlProgram)
-  assert(utxo.controlProgram === controlProgram, 'escrow contract is not an interledger transfer or has the wrong parameters')
+  assert(utxo.controlProgram === controlProgram, 'escrow contract is not an interledger transfer or has the wrong parameters: ' + controlProgram)
   assert(moment().isBefore(expiresAt), 'escrow has already expired')
   debug('verified that control program matches what we expect')
   // TODO do we need to check the expiry of the control program?
@@ -255,4 +257,8 @@ exports.fulfill = fulfill
 exports.reject = reject
 exports.timeout = timeout
 exports.verify = verify
+exports.FULFILL_CLAUSE = FULFILL_CLAUSE
+exports.REJECT_CLAUSE = REJECT_CLAUSE
+exports.TIMEOUT_CLAUSE = TIMEOUT_CLAUSE
+
 
