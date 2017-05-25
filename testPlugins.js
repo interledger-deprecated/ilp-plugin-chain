@@ -20,17 +20,17 @@ console.log('condition: ', condition, 'fulfillment:', fulfillment)
 async function runTest () {
   const sender = new PluginChain({
     accountAlias: 'Alice',
-    accountId: 'acc0WZ5E1PRG08CY',
+    accountId: 'acc0X0T5TNT008KW',
     assetAlias: 'Gold',
-    assetId: '0eb8ac24e6c8890469263b414aefc1303ab3f3aad04fcb1b9f7db77b5869a1ae',
+    assetId: '5ae7151dfefd6c8ab0010745b921caf2ace001c0cd447c66e55e85e44b3cba25',
     chainCorePrefix: 'test.chain.',
   })
 
   const receiver = new PluginChain({
     accountAlias: 'Bob',
-    accountId: 'acc0WZ5E1PRG08CT',
+    accountId: 'acc0X0T5TNS008KT',
     assetAlias: 'Gold',
-    assetId: '0eb8ac24e6c8890469263b414aefc1303ab3f3aad04fcb1b9f7db77b5869a1ae',
+    assetId: '5ae7151dfefd6c8ab0010745b921caf2ace001c0cd447c66e55e85e44b3cba25',
     chainCorePrefix: 'test.chain.',
   })
 
@@ -64,7 +64,7 @@ async function runTest () {
     console.log('receiver balance', await receiver.getBalance())
 
     try {
-    await receiver.fulfillCondition(transfer.id, fulfillment)
+      await receiver.fulfillCondition(transfer.id, fulfillment)
     } catch (err) {
       console.log('error submitting fulfillment', err)
     }
@@ -72,9 +72,13 @@ async function runTest () {
     console.log('sender balance', await sender.getBalance())
     console.log('receiver balance', await receiver.getBalance())
 
+    const fulfillmentResult = await sender.getFulfillment(transfer.id)
+    console.log('got fulfillment', fulfillmentResult)
   })
 
   const transferResult = await sender.sendTransfer(transfer)
+
+  await new Promise((resolve) => setTimeout(resolve, 500))
 
   // It will detect if you try to submit a duplicate transaction
   try {

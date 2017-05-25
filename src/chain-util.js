@@ -1,30 +1,4 @@
 // based on https://github.com/chain/chain/blob/ivy/ivy/playground/core/index.tsx
-const builtLockingTx = ({
-  client,
-  signer,
-  actions,
-  transactionData
-}) => {
-  return client.transactions.build(builder => {
-    actions.forEach(action => {
-      switch (action.type) {
-        case "spendFromAccount":
-          builder.spendFromAccount(action)
-          break
-        case "controlWithReceiver":
-          builder.controlWithReceiver(action)
-          break
-        default:
-          break
-      }
-    })
-
-    if (transactionData) {
-      builder.transactionReferenceData(transactionData)
-    }
-  })
-}
-
 const createLockingTx = ({
   client,
   signer,

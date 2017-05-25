@@ -5,6 +5,7 @@ const debug = require('debug')('ilp-plugin-chain')
 const EventEmitter = require('eventemitter3')
 const assert = require('assert')
 const moment = require('moment')
+const base64url = require('base64url')
 
 const escrow = require('./escrow')
 
@@ -43,7 +44,7 @@ module.exports = class PluginChain extends EventEmitter {
           assetId: output.assetId,
           // TODO decide on which part of the codebase is dealing with which date format
           expiresAt: moment(output.referenceData.expiresAt).valueOf(),
-          condition: Buffer.from(output.referenceData.executionCondition, 'base64').toString('hex')
+          condition: base64url.decode(output.referenceData.executionCondition, 'hex')
         })
         // TODO check that all the referenceData we expect is there
         const transfer = {
@@ -191,7 +192,46 @@ module.exports = class PluginChain extends EventEmitter {
   }
 
   async getFulfillment (transferId) {
-    // TODO
+    // TODO handle errors finding transactions
+    debug('getFulfillment for transfer:', transferId)
+    const originalTransaction = await this._getTransactionByTransferId(transferId)
+    let output
+    for (output of originalTransaction.outputs) {
+      if (output.referenceData.id === transferId) {
+        break
+      }
+    }
+    const fulfillingTransaction = await this._getTransactionSpendingOutput(output.id)
+    let input
+    for (input of fulfillingTransaction.inputs) {
+      if (input.spentOutputId === output.id) {
+        break
+      }
+    }
+
+    if (input.arguments.length !== 3 || input.arguments[2] !== '0000000000000000') {
+      debug(`tried to get fulfillment for escrow that was not fulfilled. original escrow tx: ${originalTransaction.id}, tx that spent output: ${fulfillingTransaction.id}`)
+      throw new Error('Transfer was not fulfilled')
+    }
+
+    // fulfillment is the first argument passed in as the witness
+    return base64url.encode(input.arguments[0], 'hex')
+  }
+
+  async _getTransactionSpendingOutput (outputId) {
+    try {
+      const queryPage = await this._client.transactions.query({
+        filter: 'inputs(asset_id=$1 AND spent_output_id=$2)',
+        filterParams: [this._assetId, outputId],
+        pageSize: 100
+      })
+      const transactions = queryPage.items
+      // TODO there should only be one item, handle the case where there are more
+      return transactions[0]
+    } catch (err) {
+      debug(`error getting transaction for transferId: ${transferId}`, err)
+      throw err
+    }
   }
 
   async _getTransactionByTransferId (transferId) {
@@ -265,7 +305,7 @@ module.exports = class PluginChain extends EventEmitter {
       destinationPubkey: destination.pubkey,
       amount: transfer.amount,
       expiresAt: new Date(transfer.expiresAt),
-      condition: Buffer.from(transfer.executionCondition, 'base64').toString('hex'),
+      condition: base64url.decode(transfer.executionCondition, 'hex'),
       utxoData: {
         // TODO minimize the data sent here
         id: transfer.id,
@@ -305,7 +345,7 @@ module.exports = class PluginChain extends EventEmitter {
       const fulfillTx = await escrow.fulfill({
         client: this._client,
         signer: this._signer,
-        fulfillment: Buffer.from(fulfillment, 'base64').toString('hex'),
+        fulfillment: base64url.decode(fulfillment, 'hex'),
         expiresAt: escrowUtxo.referenceData.expiresAt,
         destinationKey: {
           xpub: this._key.rootXpub,
