@@ -255,6 +255,7 @@ module.exports = class PluginChain extends EventEmitter {
       ledger: this._prefix,
       data: transfer.custom
     }
+    debug('got incoming message', message)
     this.emit('incoming_message', message)
     // TODO responses could be implemented by rejecting the transfer
   }
@@ -321,14 +322,14 @@ async _getChainInfo () {
   }
 
   _parseTransferFromOutput (output) {
-    // TODO add validation
+    // TODO add validation (including checking that someone didn't put our key in incorrectly)
     const transfer = {
       id: output.referenceData.id,
       amount: output.amount,
       ledger: this._prefix,
       // TODO need a field that the sender cannot forge
       from: this._prefix + output.referenceData.sourcePubkey,
-      to: this.getAccount(),
+      to: this._prefix + output.referenceData.destinationPubkey,
       executionCondition: output.referenceData.executionCondition,
       ilp: output.referenceData.ilp,
       custom: output.referenceData.custom,
