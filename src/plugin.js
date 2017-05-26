@@ -22,6 +22,7 @@ module.exports = class PluginChain extends EventEmitter {
     this._accountAlias = opts.accountAlias
     this._accountId = opts.accountId
     this._privateChainInstance = (opts.private !== true)
+    this._configuredKey = opts.key // must include pubkey, rootXpub, pubkeyDerivationPath
 
     this._connected = false
     this._prefix = null
@@ -41,7 +42,7 @@ module.exports = class PluginChain extends EventEmitter {
       this._prefix = this._info.prefix
       this._address = this._prefix + this._accountId
       this._receiver = await this._createReceiver()
-      this._key = await this._createKey()
+      this._key = await this._setPubkey(this._configuredKey)
       await this._listenForNotifications()
     } catch (err) {
       debug('error connecting to chain core:', err)
@@ -257,8 +258,7 @@ module.exports = class PluginChain extends EventEmitter {
     this.emit('incoming_message', message)
     // TODO responses could be implemented by rejecting the transfer
   }
-
-  async _getChainInfo () {
+async _getChainInfo () {
     try {
       const info = await this._client.config.info()
       let scheme
@@ -284,15 +284,12 @@ module.exports = class PluginChain extends EventEmitter {
     }
   }
 
-  async _createKey () {
+  async _setPubkey (configuredKey) {
     // TODO make this work with the real HSM
-    debug('creating new key')
-    const key = await this._client.accounts.createPubkey({
+    const key = configuredKey || await this._client.accounts.createPubkey({
       accountId: this._accountId
     })
-    // rename fields to make them work with other parts of the chain SDK
     this._signer.addKey(key.rootXpub, this._client.mockHsm.signerConnection)
-    debug('created key', key)
     return key
   }
 
