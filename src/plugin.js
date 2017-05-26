@@ -419,6 +419,12 @@ module.exports = class PluginChain extends EventEmitter {
             switch (clause) {
               case escrow.FULFILL_CLAUSE:
                 const fulfillment = base64url.encode(witness[0], 'hex')
+
+                // this is a holdover from when the transfer included a direction field
+                // but the ilp-connector still depends on this for the moment
+                // TODO: remove this field when the ilp-connector no longer depends on it
+                transfer.direction = direction
+
                 debug(`emitting ${direction}_fulfill:`, transfer, fulfillment)
                 this._safeEmit(direction + '_fulfill', transfer, fulfillment)
                 break
