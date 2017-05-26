@@ -21,6 +21,7 @@ module.exports = class PluginChain extends EventEmitter {
     this._assetId = opts.assetId
     this._accountAlias = opts.accountAlias
     this._accountId = opts.accountId
+    this._currencyScale = opts.currencyScale || 0
     this._privateChainInstance = (opts.private !== true)
     this._configuredKey = opts.key // must include pubkey, rootXpub, pubkeyDerivationPath
 
@@ -51,7 +52,7 @@ module.exports = class PluginChain extends EventEmitter {
     }
     this._connected = true
     debug(`connected to chain blockchain: ${this._prefix}`)
-    this.emit('connect')
+    this._safeEmit('connect')
     return
   }
 
@@ -63,11 +64,12 @@ module.exports = class PluginChain extends EventEmitter {
     debug('disconnect called')
     this._connected = false
     this._disconnecting = true
-    this.emit('disconnect')
+    this._safeEmit('disconnect')
   }
 
   isConnected () {
     // TODO handle if we lose connection to the server
+    debug(`plugin is ${this._connected ? '' : 'not '} connected`)
     return this._connected
   }
 
@@ -147,19 +149,34 @@ module.exports = class PluginChain extends EventEmitter {
       // TODO can this be put into "local" data?
       noteToSelf: transfer.noteToSelf
     }
-    const escrowUtxo = await escrow.create({
-      client: this._client,
-      signer: this._signer,
-      assetId: this._assetId,
-      sourceAccountId: this._accountId,
-      sourceReceiver,
-      destinationPubkey,
-      amount: transfer.amount,
-      expiresAt: new Date(transfer.expiresAt),
-      condition: base64url.decode(transfer.executionCondition, 'hex'),
-      utxoData
-    })
-    debug(`sent conditional transfer ${transfer.id}, utxo: ${escrowUtxo.id}`)
+    let escrowUtxo
+    try {
+      escrowUtxo = await escrow.create({
+        client: this._client,
+        signer: this._signer,
+        assetId: this._assetId,
+        sourceAccountId: this._accountId,
+        sourceReceiver,
+        destinationPubkey,
+        amount: +transfer.amount,
+        expiresAt: new Date(transfer.expiresAt),
+        condition: base64url.decode(transfer.executionCondition, 'hex'),
+        utxoData
+      })
+      debug(`sent conditional transfer ${transfer.id}, utxo: ${escrowUtxo.id}`)
+    } catch (err) {
+      if (err && err.body && err.body.code === 'CH706' && err.body.data.actions[0].message === 'Insufficient funds for tx') {
+        debug(`insufficient funds to send transfer ${transfer.id}`)
+        err.name = 'NotAcceptedError'
+        err.message = 'Insufficient Funds'
+        throw err
+      } else {
+        debug(`error creating escrow to prepare transfer ${transfer.id}:`, err)
+        err.name = 'NotAcceptedError'
+        err.message = JSON.stringify(err)
+        throw err
+      }
+    }
 
     // Start timer for when transfer expires
     // TODO: also timeout all other expired holds that belong to us
@@ -256,13 +273,14 @@ module.exports = class PluginChain extends EventEmitter {
       data: transfer.custom
     }
     debug('got incoming message', message)
-    this.emit('incoming_message', message)
+    this._safeEmit('incoming_message', message)
     // TODO responses could be implemented by rejecting the transfer
   }
 
   async _getChainInfo () {
     try {
       const info = await this._client.config.info()
+      const currencyScale = this._currencyScale
       debug('chain blockchain info:', JSON.stringify(info))
       let scheme
       if (info.isProduction) {
@@ -277,7 +295,7 @@ module.exports = class PluginChain extends EventEmitter {
       const ledgerPrefix = scheme + 'chain.' + info.blockchainId + '.' + this._assetId + '.'
       return {
         prefix: ledgerPrefix,
-        currencyScale: 0,
+        currencyScale,
         currencyCode: this._assetAlias,
         connectors: []
       }
@@ -327,7 +345,7 @@ module.exports = class PluginChain extends EventEmitter {
     // TODO add validation (including checking that someone didn't put our key in incorrectly)
     const transfer = {
       id: output.referenceData.id,
-      amount: output.amount,
+      amount: '' + output.amount,
       ledger: this._prefix,
       // TODO need a field that the sender cannot forge
       from: this._prefix + output.referenceData.sourcePubkey,
@@ -378,7 +396,7 @@ module.exports = class PluginChain extends EventEmitter {
               case escrow.FULFILL_CLAUSE:
                 const fulfillment = base64url.encode(witness[0], 'hex')
                 debug(`emitting ${direction}_fulfill:`, transfer, fulfillment)
-                this.emit(direction + '_fulfill', transfer, fulfillment)
+                this._safeEmit(direction + '_fulfill', transfer, fulfillment)
                 break
               case escrow.REJECT_CLAUSE:
                 const inputReferenceData = input.referenceData && input.referenceData || {}
@@ -390,7 +408,7 @@ module.exports = class PluginChain extends EventEmitter {
                   triggeredAt: inputReferenceData.triggeredAt
                 }
                 debug(`emitting ${direction}_reject (rejected by destination):`, transfer, rejectionMessage)
-                this.emit(direction + '_reject', transfer, rejectionMessage)
+                this._safeEmit(direction + '_reject', transfer, rejectionMessage)
                 break
               case escrow.TIMEOUT_CLAUSE:
                 const timeoutMessage = {
@@ -401,7 +419,7 @@ module.exports = class PluginChain extends EventEmitter {
                   triggeredAt: (new Date()).toISOString()
                 }
                 debug(`emitting ${direction}_reject (transfer expired):`, transfer, timeoutMessage)
-                this.emit(direction + '_reject', transfer, timeoutMessage)
+                this._safeEmit(direction + '_reject', transfer, timeoutMessage)
                 break
               default:
                 break
@@ -439,13 +457,13 @@ module.exports = class PluginChain extends EventEmitter {
         // TODO check that all the referenceData we expect is there
         debug('emitting incoming_prepare', transfer)
         try {
-          this.emit('incoming_prepare', transfer)
+          this._safeEmit('incoming_prepare', transfer)
         } catch (err) {
           console.error('error in event handler', err)
         }
       } else if (this._outputIsFromUs(output)) {
         const transfer = this._parseTransferFromOutput(output)
-        this.emit('outgoing_prepare', transfer)
+        this._safeEmit('outgoing_prepare', transfer)
       }
     }
   }
@@ -502,7 +520,7 @@ module.exports = class PluginChain extends EventEmitter {
         debug('error processing transaction feed', err)
         debug('emitting disconnect')
         this._connected = false
-        this.emit('disconnect')
+        this._safeEmit('disconnect')
       })
   }
 
@@ -592,6 +610,14 @@ module.exports = class PluginChain extends EventEmitter {
       debug(`expired transfer: ${escrowUtxo.referenceData.id}, tx: ${resultTx.id}`)
     } catch (err) {
       debug('error expiring transfer:' + escrowUtxo.referenceData.id, JSON.stringify(err))
+    }
+  }
+
+  _safeEmit () {
+    try {
+      this.emit.apply(this, arguments)
+    } catch (err) {
+      debug('error in handler for event', arguments, err)
     }
   }
 }
