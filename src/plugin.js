@@ -25,6 +25,14 @@ module.exports = class PluginChain extends EventEmitter {
     this._privateChainInstance = (opts.private !== true)
     this._configuredKey = opts.key // must include pubkey, rootXpub, pubkeyDerivationPath
 
+    // HTTP RPC messaging
+    this._rpcUris = opts.rpcUris || {} // map of ILP address to RPC URI
+    this._rpc = new HttpRpc(this)
+    this._rpc.addMethod('send_message', this._handleSendMessage)
+    // TODO: implement HTTP token authentication
+    this.isAuthorized = () => true
+    this.receive = this._rpc._receive.bind(this._rpc)
+
     this._connected = false
     this._disconnecting = false
     this._prefix = null
@@ -248,8 +256,22 @@ module.exports = class PluginChain extends EventEmitter {
   }
 
   async sendMessage (message) {
-    // for now this sends messages as ledger transfers that the receiver won't be able to fulfill
-    // TODO replace ledger messaging with another type of messaging
+    // if the HTTP RPC URIs are configured, it'll send messages through that
+    // otherwise it will send the message as a payment it knows the receiver
+    // cannot fulfill
+
+    // See if we have an HTTP RPC URI for the destination account
+    if (this._rpcUris[message.to]) {
+      this._rpc.call(
+        this._rpcUris[message.to],
+        'sendmessage',
+        this._prefix,
+        [message])
+
+      this._safeEmit('outgoing_message', message)
+      return
+    }
+
     const transfer = {
       id: uuid(),
       from: this.getAccount(),
@@ -262,6 +284,7 @@ module.exports = class PluginChain extends EventEmitter {
     }
     const sendTx = await this.sendTransfer(transfer)
     debug('sent message as ledger transaction', message)
+    this._safeEmit('outgoing_message', message)
   }
 
   async _handleLedgerMessage (transfer) {
@@ -280,6 +303,7 @@ module.exports = class PluginChain extends EventEmitter {
   async _getChainInfo () {
     try {
       const info = await this._client.config.info()
+      // TODO get currencyScale from the asset definition if it's there
       const currencyScale = this._currencyScale
       debug('chain blockchain info:', JSON.stringify(info))
       let scheme
