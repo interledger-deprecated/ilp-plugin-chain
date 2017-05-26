@@ -46,11 +46,11 @@ module.exports = class PluginChain extends EventEmitter {
       this._key = await this._setPubkey(this._configuredKey)
       await this._listenForNotifications()
     } catch (err) {
-      debug('error connecting to chain core:', err)
+      debug('error connecting to chain core:', err.body || err)
       throw new Error('Error connecting client: ' + err.message)
     }
     this._connected = true
-    debug('connected')
+    debug(`connected to chain blockchain: ${this._prefix}`)
     this.emit('connect')
     return
   }
@@ -263,6 +263,7 @@ module.exports = class PluginChain extends EventEmitter {
   async _getChainInfo () {
     try {
       const info = await this._client.config.info()
+      debug('chain blockchain info:', JSON.stringify(info))
       let scheme
       if (info.isProduction) {
         if (this._privateChainInstance) {
@@ -355,6 +356,12 @@ module.exports = class PluginChain extends EventEmitter {
           if (output.id === input.spentOutputId) {
 
             const transfer = this._parseTransferFromOutput(output)
+
+            // ignore transfers related to ledger messaging
+            if (transfer.executionCondition === MESSAGE_STRING) {
+              break
+            }
+
             let direction
             if (this._outputIsForUs(output)) {
               direction = 'incoming'
