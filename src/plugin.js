@@ -10,6 +10,7 @@ const uuid = require('uuid')
 
 const escrow = require('./escrow')
 const MESSAGE_STRING = 'messagemessagemessagemessagemessagemessagem='
+const HttpRpc = require('./rpc')
 
 module.exports = class PluginChain extends EventEmitter {
   constructor (opts) {
