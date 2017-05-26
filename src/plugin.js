@@ -29,10 +29,10 @@ module.exports = class PluginChain extends EventEmitter {
     // HTTP RPC messaging
     this._rpcUris = opts.rpcUris || {} // map of ILP address to RPC URI
     this._rpc = new HttpRpc(this)
-    this._rpc.addMethod('send_message', this._handleSendMessage)
+    this._rpc.addMethod('send_message', this._handleRpcMessage)
     // TODO: implement HTTP token authentication
     this.isAuthorized = () => true
-    this.receive = this._rpc._receive.bind(this._rpc)
+    this.receive = this._rpc.receive.bind(this._rpc)
 
     this._connected = false
     this._disconnecting = false
@@ -265,7 +265,7 @@ module.exports = class PluginChain extends EventEmitter {
     if (this._rpcUris[message.to]) {
       this._rpc.call(
         this._rpcUris[message.to],
-        'sendmessage',
+        'send_message',
         this._prefix,
         [message])
 
@@ -299,6 +299,13 @@ module.exports = class PluginChain extends EventEmitter {
     debug('got incoming message', message)
     this._safeEmit('incoming_message', message)
     // TODO responses could be implemented by rejecting the transfer
+  }
+
+  async _handleRpcMessage (message) {
+    debug('got incoming RPC message', message)
+    // TODO validate the fields
+    this._safeEmit('incoming_message', message)
+    return true
   }
 
   async _getChainInfo () {

@@ -14,23 +14,21 @@ module.exports = class HttpRpc extends EventEmitter {
     super()
     this._methods = {}
     this._that = that
-
-    this.receive = this._receive.bind(this)
-    this.call = this._call.bind(this)
   }
 
   addMethod (name, handler) {
     this._methods[name] = handler
   }
 
-  async _receive (method, params) {
+  async receive (method, params) {
     // TODO: 4XX when method doesn't exist
     debug('got request for', method)
     debug('got params:', params)
-    return this._methods[method].apply(this._that, params)
+    const result = await this._methods[method].apply(this._that, params)
+    return result
   }
 
-  async _call (rpcUri, method, prefix, params) {
+  async call (rpcUri, method, prefix, params) {
     debug('calling', method, 'with', params)
 
     const uri = rpcUri + '?method=' + method + '&prefix=' + prefix
