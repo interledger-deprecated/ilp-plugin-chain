@@ -25,6 +25,7 @@ module.exports = class PluginChain extends EventEmitter {
     this._configuredKey = opts.key // must include pubkey, rootXpub, pubkeyDerivationPath
 
     this._connected = false
+    this._disconnecting = false
     this._prefix = null
     this._info = null
     this._address = null
@@ -55,14 +56,13 @@ module.exports = class PluginChain extends EventEmitter {
   }
 
   async disconnect () {
-    try {
-      await this._client.transactionFeeds.delete({
-        alias: this._transactionFeedAlias
-      })
-    } catch (e) {
-      // not our problem if we can't remove the feed
-    }
+    // TODO maybe delete the transactionFeed
+    // we were deleting the feed before but that was causing issues because
+    // the notification loop would try to get the next notifications after the
+    // feed was deleted
+    debug('disconnect called')
     this._connected = false
+    this._disconnecting = true
     this.emit('disconnect')
   }
 
@@ -241,10 +241,10 @@ module.exports = class PluginChain extends EventEmitter {
       amount: 1,
       executionCondition: MESSAGE_STRING,
       custom: message.data,
-      expiresAt: moment().add(10, 'seconds')
+      expiresAt: moment().add(10, 'seconds').toISOString()
     }
     const sendTx = await this.sendTransfer(transfer)
-    debug('sent message as ledger tx:', sendTx, message)
+    debug('sent message as ledger transaction', message)
   }
 
   async _handleLedgerMessage (transfer) {
@@ -259,7 +259,8 @@ module.exports = class PluginChain extends EventEmitter {
     this.emit('incoming_message', message)
     // TODO responses could be implemented by rejecting the transfer
   }
-async _getChainInfo () {
+
+  async _getChainInfo () {
     try {
       const info = await this._client.config.info()
       let scheme
@@ -477,7 +478,13 @@ async _getChainInfo () {
     const processingLoop = (tx, next, done, fail) => {
       // TODO handle errors
       this._handleNotification(tx)
-        .then(() => next(true))
+        .then(() => {
+          if (this._disconnecting) {
+            done(true)
+          } else {
+            next(true)
+          }
+        })
         .catch(err => {
           debug('error processing notification', err)
           fail(err)
@@ -485,8 +492,10 @@ async _getChainInfo () {
     }
     feed.consume(processingLoop)
       .catch(err => {
-        this.disconnect()
-        debug('error consuming feed', err)
+        debug('error processing transaction feed', err)
+        debug('emitting disconnect')
+        this._connected = false
+        this.emit('disconnect')
       })
   }
 
