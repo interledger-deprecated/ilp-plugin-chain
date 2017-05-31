@@ -553,13 +553,15 @@ module.exports = class PluginChain extends EventEmitter {
           fail(err)
         })
     }
-    feed.consume(processingLoop)
-      .catch(err => {
-        debug('error processing transaction feed', err)
-        debug('emitting disconnect')
-        this._connected = false
-        this._safeEmit('disconnect')
-      })
+    function listen () {
+      return feed.consume(processingLoop)
+        .catch(err => {
+          // TODO on certain errors we should probably emit disconnect
+          debug('error processing transaction feed', (err && err.response && typeof err.response.text === 'function' ? err.response.text() : ''), err)
+          listen()
+        })
+    }
+    listen()
   }
 
   async _getTransactionWithOutput (outputId) {
