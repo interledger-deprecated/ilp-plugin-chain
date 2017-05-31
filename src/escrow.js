@@ -112,7 +112,7 @@ async function verify ({
   }
   const controlProgram = compiled.program
   debug('recompiled contract', controlProgram)
-  assert(utxo.controlProgram === controlProgram, 'escrow contract is not an interledger transfer or has the wrong parameters: ' + controlProgram)
+  assert(utxo.controlProgram === controlProgram, 'escrow contract is not an interledger transfer or has the wrong parameters. actual: ' + utxo.controlProgram + ' expected: ' + controlProgram)
   assert(moment().isBefore(expiresAt), 'escrow has already expired')
   debug('verified that control program matches what we expect')
   // TODO do we need to check the expiry of the control program?
