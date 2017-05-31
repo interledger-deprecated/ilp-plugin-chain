@@ -522,7 +522,7 @@ module.exports = class PluginChain extends EventEmitter {
       })
       debug('created new transaction feed')
     } catch (err) {
-      if (err.message.indexOf('CH050') !== -1) {
+      if (err.message.indexOf('CH050') === -1) {
         debug('error creating transaction feed', err)
         throw new Error('error creating transaction feed: ' + err.message)
       }
