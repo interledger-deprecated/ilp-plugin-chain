@@ -13,8 +13,8 @@ This plugin enables [Interledger](https://interledger.org) payments through [Cha
 **Dependencies:**
 
 - Node.js >=v7.10.0
-- [Chain Core Developer Edition with Ivy](https://github.com/chain/chain/tree/witness-args)
-- `npm link` the [`chain-sdk`](https://github.com/chain/chain/tree/witness-args/sdk/node)
+- [Chain Core Developer Edition with Ivy >=v1.2.3](https://chain.com/docs/1.2/ivy-playground/install)
+- `npm link` the [`chain-sdk`](https://github.com/chain/chain/tree/ivy/sdk/node)
 
 **Setup:**
 
