@@ -25,6 +25,7 @@ module.exports = class PluginChain extends EventEmitter {
     this._currencyScale = opts.currencyScale || 0
     this._privateChainInstance = (opts.private !== true)
     this._configuredKey = opts.key // must include pubkey, rootXpub, pubkeyDerivationPath
+    this._notificationPollInterval = opts.pollInterval || 500
 
     // HTTP RPC messaging
     this._rpcUris = opts.rpcUris || {} // map of ILP address to RPC URI
@@ -41,8 +42,8 @@ module.exports = class PluginChain extends EventEmitter {
     this._address = null
     this._receiver = null
     this._key = null
-    this._transactionFeedAlias = null
     this._expiryWatchers = {}
+    this._notificationInterval = null
   }
 
   async connect () {
@@ -73,6 +74,7 @@ module.exports = class PluginChain extends EventEmitter {
     debug('disconnect called')
     this._connected = false
     this._disconnecting = true
+    clearInterval(this._notificationInterval)
     this._safeEmit('disconnect')
   }
 
@@ -396,6 +398,7 @@ module.exports = class PluginChain extends EventEmitter {
   }
 
   async _handleNotification (tx) {
+    debug('handling notification for tx: ' + tx.id)
     // Handle outgoing_{fulfill,reject} and incoming_{fulfill,reject}
     // If the transaction we just got notified about spends an output to/from us,
     // that means some transaction we were involved in was finalized
@@ -506,67 +509,37 @@ module.exports = class PluginChain extends EventEmitter {
     }
   }
 
-  async _listenForNotifications () {
-    debug(`subscribing to transactionFeed for asset: ${this._assetId}`)
+  async _getNotifications (previousEndTime) {
     const filter = `(inputs(asset_id='${this._assetId}') OR outputs(asset_id='${this._assetId}'))`
-    // TODO is there a way to limit the time to transactions after now?
-    // TODO should the alias be pubkey or assetId? we don't want other parties to change what the feed is listening to
-    this._transactionFeedAlias = this._key.pubkey + '/' + this._assetId
 
-    // TODO should we use a transactionFeed or just plain transaction queries? we don't want exponential backoff, because we might miss a notification
-    let feed
+    if (this._disconnecting) {
+      return
+    }
+
+    const startTime = previousEndTime
+    const endTime = Date.now()
     try {
-      feed = await this._client.transactionFeeds.create({
-        alias: this._transactionFeedAlias,
-        filter
+      await this._client.transactions.queryAll({
+        filter,
+        startTime,
+        endTime
+      }, (notification) => {
+        return this._handleNotification(notification)
+          .catch((err) => {
+            debug('error processing notification', err)
+          })
       })
-      debug('created new transaction feed')
     } catch (err) {
-      if (err.message.indexOf('CH050') === -1) {
-        debug('error creating transaction feed', err)
-        throw new Error('error creating transaction feed: ' + err.message)
-      }
+      debug('error processing notifications', err)
     }
-    if (!feed) {
-      try {
-        feed = await this._client.transactionFeeds.get({
-          alias: this._transactionFeedAlias
-        })
-        debug('using existing transaction feed')
-      } catch (err) {
-        debug('error getting transaction feed', err)
-        throw new Error('error getting transaction feed: ' + err.message)
-      }
-    }
-    const processingLoop = (tx, next, done, fail) => {
-      // TODO handle errors
-      this._handleNotification(tx)
-        .catch((err) => {
-          // If we don't understand a notification just move on
-          debug('error processing notification', err)
-          next(true)
-        })
-        .then(() => {
-          if (this._disconnecting) {
-            done(true)
-          } else {
-            next(true)
-          }
-        })
-        .catch(err => {
-          debug('error processing notification', err)
-          fail(err)
-        })
-    }
-    function listen () {
-      return feed.consume(processingLoop)
-        .catch(err => {
-          // TODO on certain errors we should probably emit disconnect
-          debug('error processing transaction feed', (err && err.response && typeof err.response.text === 'function' ? err.response.text() : ''), err)
-          listen()
-        })
-    }
-    listen()
+  }
+
+  async _listenForNotifications () {
+    let previousEndTime = Date.now()
+    this._notificationInterval = setInterval(() => {
+      this._getNotifications(previousEndTime)
+      previousEndTime = Date.now()
+    }, this._notificationPollInterval)
   }
 
   async _getTransactionWithOutput (outputId) {
