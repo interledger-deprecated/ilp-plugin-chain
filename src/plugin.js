@@ -522,7 +522,7 @@ module.exports = class PluginChain extends EventEmitter {
       })
       debug('created new transaction feed')
     } catch (err) {
-      if (err.message.indexOf('CH002') !== -1) {
+      if (err.message.indexOf('CH050') !== -1) {
         debug('error creating transaction feed', err)
         throw new Error('error creating transaction feed: ' + err.message)
       }
@@ -541,6 +541,11 @@ module.exports = class PluginChain extends EventEmitter {
     const processingLoop = (tx, next, done, fail) => {
       // TODO handle errors
       this._handleNotification(tx)
+        .catch((err) => {
+          // If we don't understand a notification just move on
+          debug('error processing notification', err)
+          next(true)
+        })
         .then(() => {
           if (this._disconnecting) {
             done(true)
