@@ -10,6 +10,7 @@ const ESCROW_CONTRACT_SOURCE =
                     expires_at: Time) locks value {
       clause fulfill(fulfillment: String, sig: Signature) {
         verify before(expires_at)
+        verify size(fulfillment) == 32
         verify sha256(fulfillment) == condition
         verify checkTxSig(destination_key, sig)
         unlock value
