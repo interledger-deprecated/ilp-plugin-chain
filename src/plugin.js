@@ -200,7 +200,7 @@ module.exports = class PluginChain extends EventEmitter {
     return null
   }
 
-  async fulfillCondition (transferId, fulfillment) {
+  async fulfillCondition (transferId, fulfillment, fulfillmentData) {
     debug(`fulfillCondition for transfer ${transferId} with ${fulfillment}`)
     // TODO check if the transfer is already fulfilled
     const escrowUtxo = await this._getUtxoByTransferId(transferId)
@@ -219,6 +219,7 @@ module.exports = class PluginChain extends EventEmitter {
           xpub: this._key.rootXpub,
           derivationPath: this._key.pubkeyDerivationPath
         },
+        inputData: { fulfillmentData },
         destinationReceiver,
         escrowUtxo
       })
@@ -430,14 +431,16 @@ module.exports = class PluginChain extends EventEmitter {
             switch (clause) {
               case escrow.FULFILL_CLAUSE:
                 const fulfillment = base64url.encode(witness[0], 'hex')
+                const inputReferenceData = input.referenceData && input.referenceData || {}
+                const fulfillmentData = inputReferenceData.fulfillmentData
 
                 // this is a holdover from when the transfer included a direction field
                 // but the ilp-connector still depends on this for the moment
                 // TODO: remove this field when the ilp-connector no longer depends on it
                 transfer.direction = direction
 
-                debug(`emitting ${direction}_fulfill:`, transfer, fulfillment)
-                this._safeEmit(direction + '_fulfill', transfer, fulfillment)
+                debug(`emitting ${direction}_fulfill:`, transfer, fulfillment, fulfillmentData)
+                this._safeEmit(direction + '_fulfill', transfer, fulfillment, fulfillmentData)
                 break
               case escrow.REJECT_CLAUSE:
                 const inputReferenceData = input.referenceData && input.referenceData || {}

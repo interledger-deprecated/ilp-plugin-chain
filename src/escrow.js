@@ -123,19 +123,23 @@ async function fulfill ({
   client,
   signer,
   fulfillment,
+  inputData,
   escrowUtxo,
   destinationKey,
   destinationReceiver,
-  expiresAt
+  expiresAt,
+  utxoData
 }) {
   const actions = [{
     type: 'spendUnspentOutput',
-    outputId: escrowUtxo.id
+    outputId: escrowUtxo.id,
+    referenceData: inputData
   }, {
     type: 'controlWithReceiver',
     amount: escrowUtxo.amount,
     assetId: escrowUtxo.assetId,
     receiver: destinationReceiver
+    referenceData: utxoData
   }]
 
   const witness = [{
